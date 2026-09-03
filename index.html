@@ -1038,8 +1038,11 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
+const MODOS = ["consola","radar","terminal","velo","contra","cert"];
+
 async function launch(){
   const mode = pending;
+  if(!MODOS.includes(mode)){ goto("land"); return; }   // hash cambiado sin recargar
   S.archive = false;
   try{
     await audioUp(mode !== "velo");
@@ -1323,7 +1326,19 @@ $("r-sv").textContent  = "×9";
 $("exp").textContent = "EXP. 17622/26 — FORM. C-4 ANEXO II — " +
   new Date().toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
 
-const h = location.hash.replace("#","");
-if(["consola","radar","terminal","velo","contra","cert"].includes(h)) goto(h);
+/* Cambiar el hash no vuelve a correr el script, así que sin esto el botón atrás
+   —o abrir otro módulo por URL en una pestaña ya cargada— dejaba `pending` viejo
+   y launch() caía en el modo equivocado. */
+window.addEventListener("hashchange", ()=>{
+  const t = location.hash.replace("#","") || "land";
+  if(t === "land"){ if(current !== "land"){ stopAll(); show("land"); } return; }
+  if(!MODOS.includes(t)) return;
+  if(pending === t && current === "gate") return;   // ya vamos hacia ahí
+  if(S.mode === t && S.running) return;             // ya está corriendo
+  stopAll(); goto(t);
+});
+
+const h0 = location.hash.replace("#","");
+if(MODOS.includes(h0)) goto(h0);
 </script>
 </html>
