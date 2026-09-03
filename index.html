@@ -225,14 +225,18 @@
   .cert .decl{border-top:1px solid #C8C0AE;border-bottom:1px solid #C8C0AE;
     padding:13px 0;font-size:13px;line-height:1.6;margin-bottom:16px}
   .cert .decl b{background:#14171C;color:#F2EEE3;padding:1px 6px;font-family:var(--mono);font-size:12px}
-  .bars{display:flex;align-items:flex-end;gap:1.5px;height:44px;margin-bottom:6px}
-  .bars i{background:#14171C;display:block;height:100%}
+  /* El sello va en el flujo, no absoluto: posicionado a mano pisaba la declaración. */
+  .cert-foot{display:flex;align-items:flex-end;justify-content:space-between;gap:14px}
+  .cert-foot-l{min-width:0;flex:1 1 auto}
+  .bars{display:flex;align-items:flex-end;gap:1.5px;height:44px;margin-bottom:6px;overflow:hidden}
+  .bars i{background:#14171C;display:block;height:100%;flex:0 0 auto}
   .cert .code{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:#5C6472}
   .stamp{
-    position:absolute;right:22px;bottom:74px;width:118px;height:118px;border-radius:50%;
+    flex:0 0 auto;width:104px;height:104px;border-radius:50%;
     border:2.5px solid #B03A30;color:#B03A30;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;gap:2px;transform:rotate(-13deg);
-    font-family:var(--mono);text-align:center;opacity:.86;pointer-events:none;
+    align-items:center;justify-content:center;gap:2px;transform:rotate(-11deg);
+    font-family:var(--mono);text-align:center;opacity:.88;pointer-events:none;
+    margin-bottom:2px;
   }
   .stamp b{font-size:19px;font-weight:700;letter-spacing:.04em;line-height:1}
   .stamp span{font-size:7.5px;letter-spacing:.13em;line-height:1.3}
@@ -420,12 +424,16 @@
             volumen relevado durante el período indicado. El presente certificado no acredita
             ausencia física: acredita ausencia de registro. La distinción es del organismo.
           </div>
-          <div class="bars" id="ct-bars"></div>
-          <div class="code" id="ct-code">—</div>
-          <div class="stamp">
-            <b>NO CONSTA</b>
-            <span>DIR. NAC. DE</span>
-            <span>TELEDETECCIÓN</span>
+          <div class="cert-foot">
+            <div class="cert-foot-l">
+              <div class="bars" id="ct-bars"></div>
+              <div class="code" id="ct-code">—</div>
+            </div>
+            <div class="stamp">
+              <b>NO CONSTA</b>
+              <span>DIR. NAC. DE</span>
+              <span>TELEDETECCIÓN</span>
+            </div>
           </div>
         </article>
 
