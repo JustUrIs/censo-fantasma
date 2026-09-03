@@ -612,7 +612,7 @@ const FM = {
   tplI:null, tplQ:null, lags:0,
   sp:null, gain:null, mute:null, txSrc:null,
   prof:null, clut:null, mov:null, work:null,
-  l0:0, learn:0, sens:9, peakK:0, peakV:0, targets:0,
+  l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   mmPerLag:0, cps:0, ready:false
 };
 
@@ -641,6 +641,7 @@ function fmInit(fs){
   FM.mmPerLag = C_SOUND/(2*fs)*1000;
   FM.cps = fs/N;
   FM.learn = 0;
+  FM.scan = 0;
   FM.ready = false;
 }
 
@@ -686,18 +687,29 @@ function fmStop(){
 
 function fmProcess(ev){
   const x = ev.inputBuffer.getChannelData(0);
-  const N = FM.N, L = FM.lags, tI = FM.tplI, tQ = FM.tplQ, prof = FM.prof;
+  const N = FM.N, tI = FM.tplI, tQ = FM.tplQ, prof = FM.prof;
+
+  /* El bloque de captura (4096) es múltiplo exacto del barrido (1024), así que el
+     desfase entre bloque y barrido no cambia: el camino directo cae siempre en el
+     mismo retardo. Se busca entero solo al arrancar; después se sigue una ventana
+     angosta. Baja el costo de 3,2M a ~1,2M multiplicaciones por cuadro.          */
+  const full = FM.scan < 6;
+  const lo = full ? 0 : Math.max(0, FM.l0 - 16);
+  const hi = full ? FM.lags : Math.min(FM.lags, FM.l0 + FM.RNG + 16);
+  FM.scan++;
 
   // Filtro adaptado en cuadratura: la magnitud es la envolvente del eco.
-  for(let l=0;l<L;l++){
+  for(let l=lo;l<hi;l++){
     let si=0, sq=0;
     for(let n=0;n<N;n++){ const v = x[l+n]; si += v*tI[n]; sq += v*tQ[n]; }
     prof[l] = Math.sqrt(si*si + sq*sq);
   }
 
-  // Camino directo = pico dentro del primer período. Es el cero de la regla.
-  let best=0, bi=0;
-  for(let l=0;l<N;l++) if(prof[l] > best){ best = prof[l]; bi = l; }
+  // Camino directo = pico más fuerte. Es el cero de la regla.
+  let best=0, bi=FM.l0;
+  const sTo = full ? N : Math.min(hi, FM.l0 + 16);
+  for(let l=lo;l<sTo;l++) if(prof[l] > best){ best = prof[l]; bi = l; }
+  if(best <= 0) return;
   FM.l0 = bi;
 
   const a = FM.learn < 90 ? 0.12 : 0.012;   // aprende rápido, después se aquieta
@@ -1035,7 +1047,7 @@ document.addEventListener("click", e=>{
   const a = e.target.closest("[data-act]");
   if(!a) return;
   if(a.dataset.act === "cal") calibrate();
-  if(a.dataset.act === "clut"){ FM.learn = 0; FM.ready = false; }
+  if(a.dataset.act === "clut"){ FM.learn = 0; FM.scan = 0; FM.ready = false; }
   if(a.dataset.act === "jam"){
     S.jamming ? jamOff() : jamOn();
     a.classList.toggle("on", S.jamming);
@@ -1097,7 +1109,7 @@ $("r-gain").addEventListener("input", e=>{
 document.addEventListener("keydown", e=>{
   if(current === "radar"){
     const r = e.key.toLowerCase();
-    if(r === "k"){ FM.learn = 0; FM.ready = false; }
+    if(r === "k"){ FM.learn = 0; FM.scan = 0; FM.ready = false; }
     if(r === "h"){ const o=$("ropbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
     return;
   }
