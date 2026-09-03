@@ -18,6 +18,9 @@
     --sans:"IBM Plex Sans Condensed","Helvetica Neue",Helvetica,Arial,sans-serif;
   }
   *{box-sizing:border-box}
+  /* Debe ir antes que cualquier clase con display propio: .gate/.inst/.btns
+     definen display y pisarían al atributo hidden sin este !important. */
+  [hidden]{display:none!important}
   html,body{height:100%}
   body{
     margin:0;background:var(--ground);color:var(--ink);
