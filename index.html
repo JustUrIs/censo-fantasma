@@ -232,6 +232,11 @@
             <span class="t">Terminal personal</span>
             <span class="d">Tu propio dispositivo, relevándote a vos. Movete la mano delante de la pantalla.</span>
           </button>
+          <button class="tile" data-go="radar" style="--tint:var(--amber-hot)">
+            <span class="n">MÓDULO 05 · TELEMETRÍA</span>
+            <span class="t">Radar de rango</span>
+            <span class="d">Barrido FMCW 17→22 kHz. Mide <em>a qué distancia</em> está el cuerpo, no solo que se mueve.</span>
+          </button>
           <button class="tile" data-go="velo" style="--tint:var(--alert)">
             <span class="n">MÓDULO 03 · CONTRAMEDIDA</span>
             <span class="t">Velo</span>
@@ -277,8 +282,10 @@
           <div class="verdict" id="c-verdict">DOMICILIO SIN OCUPACIÓN REGISTRADA</div>
         </div>
         <dl class="rows">
-          <div class="row"><dt>Energía Doppler</dt><dd class="acc" id="c-db">—</dd></div>
+          <div class="row"><dt>Doppler neto</dt><dd class="acc" id="c-db">—</dd></div>
           <div class="row"><dt>Nivel</dt><dd style="flex:1"><span class="meter"><i id="c-bar"></i></span></dd></div>
+          <div class="row"><dt>Banda referencia</dt><dd id="c-ref">—</dd></div>
+          <div class="row"><dt>Rechazo modo común</dt><dd class="cel" id="c-rej">—</dd></div>
           <div class="row"><dt>Dirección</dt><dd class="cel" id="c-dir">—</dd></div>
           <div class="row"><dt>Portadora</dt><dd id="c-f0">—</dd></div>
           <div class="row"><dt>Resolución</dt><dd id="c-res">—</dd></div>
@@ -309,6 +316,54 @@
         <span>CANAL <b>ISM 17–22 kHz</b></span>
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
+        <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ RADAR FMCW ============ -->
+    <section class="inst" id="v-radar" hidden>
+      <div class="scope">
+        <canvas id="rwf"></canvas>
+        <div class="scope-tag">PERFIL DE RANGO · CLUTTER ESTÁTICO SUPRIMIDO</div>
+        <div class="scope-scale" id="r-scale"></div>
+        <div class="opbar" id="ropbar">
+          <k>K</k> reaprender clutter &nbsp; <k>H</k> ocultar panel
+        </div>
+      </div>
+      <div class="readout">
+        <div class="count-block">
+          <div class="count-label">Distancia al blanco</div>
+          <div class="count zero" id="r-dist">—</div>
+          <div class="verdict" id="r-verdict">SIN BLANCOS MÓVILES EN EL VOLUMEN</div>
+        </div>
+        <dl class="rows">
+          <div class="row"><dt>Intensidad de retorno</dt><dd class="acc" id="r-amp">—</dd></div>
+          <div class="row"><dt>Nivel</dt><dd style="flex:1"><span class="meter"><i id="r-bar"></i></span></dd></div>
+          <div class="row"><dt>Blancos móviles</dt><dd class="cel" id="r-tg">0</dd></div>
+          <div class="row"><dt>Ancho de barrido</dt><dd id="r-b">5,00 kHz</dd></div>
+          <div class="row"><dt>Resolución de rango</dt><dd class="acc" id="r-res">3,4 cm</dd></div>
+          <div class="row"><dt>Alcance</dt><dd id="r-max">—</dd></div>
+          <div class="row"><dt>Barridos por segundo</dt><dd id="r-cps">—</dd></div>
+          <div class="row"><dt>Camino directo</dt><dd id="r-l0">—</dd></div>
+          <div class="row"><dt>Clutter</dt><dd id="r-cl">APRENDIENDO</dd></div>
+        </dl>
+        <div class="ctl">
+          <label>Sensibilidad <span id="r-sv" style="color:var(--amber)"></span>
+            <input type="range" id="r-sens" min="1" max="30" step="1" value="9">
+          </label>
+          <label>Potencia de emisión
+            <input type="range" id="r-gain" min="1" max="30" step="1" value="10">
+          </label>
+          <div class="btns">
+            <button class="b" data-act="clut">Reaprender clutter</button>
+          </div>
+        </div>
+      </div>
+      <div class="strip">
+        <span><span class="dot" id="r-dot"></span><b id="r-state">EN ESPERA</b></span>
+        <span>MODO <b>FMCW · FILTRO ADAPTADO</b></span>
+        <span>BARRIDO <b>17,0 → 22,0 kHz</b></span>
+        <span>MUESTREO <b id="r-sr">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
       </div>
     </section>
@@ -360,16 +415,19 @@
 const C_SOUND = 343;
 const FFT = 16384;
 const GUARD = 5;      // bins excluidos alrededor de la portadora (fuga espectral)
-const SPAN  = 70;     // bins analizados a cada lado
+const SPAN  = 70;     // bins analizados a cada lado  → ±205 Hz ≈ ±1,85 m/s
+const REF_A = 273;    // banda de referencia: ±800 Hz…
+const REF_B = 512;    // …±1500 Hz. Ningún cuerpo humano produce Doppler acá.
 
 const S = {
   ctx:null, stream:null, analyser:null, osc:null, oscGain:null,
   jamSrc:null, jamGain:null, jamming:false,
   buf:null, freqs:null, binHz:0, carrier:0,
   f0:19000, gain:0.07, thr:3.5,
-  base:null, calSamples:[], calibrating:false,
+  base:null, baseRef:null, calSamples:[], calibrating:false,
   n:0, running:false, mode:null,
   db:0, dir:0, peak:0, lastHit:0, forced:null, ghost:0,
+  ema:0, level:0, pend:0, pendN:0,
   HOLD:4200,
   archive:false, archDrive:0, archPhase:0
 };
@@ -458,7 +516,11 @@ function jamOff(){
   S.jamSrc=null; S.jamGain=null; S.jamming=false;
 }
 
-function calibrate(){ S.calibrating = true; S.calSamples = []; S.base = null; }
+function calibrate(){
+  S.calibrating = true; S.calSamples = [];
+  S.base = null; S.baseRef = null;
+  S.ema = 0; S.level = 0; S.pend = 0; S.pendN = 0; S.peak = 0;
+}
 
 /* Una medición: devuelve dB de energía lateral sobre el piso calibrado. */
 function measure(){
@@ -468,45 +530,223 @@ function measure(){
   S.carrier = c;
   const p = i => Math.pow(10, S.freqs[i] / 10);   // dB → potencia lineal
 
-  let up=0, lo=0, car=0;
+  let up=0, lo=0, car=0, ref=0, nRef=0;
   for(let k=-2;k<=2;k++){ const i=c+k; if(i>=0&&i<S.freqs.length) car += p(i); }
   for(let k=GUARD;k<=SPAN;k++){
     const a=c+k, b=c-k;
     if(a<S.freqs.length) up += p(a);
     if(b>=0)             lo += p(b);
   }
+  // Canal de referencia: mismo ambiente acústico, fuera del rango Doppler humano.
+  for(let k=REF_A;k<=REF_B;k++){
+    const a=c+k, b=c-k;
+    if(a<S.freqs.length){ ref += p(a); nRef++; }
+    if(b>=0)            { ref += p(b); nRef++; }
+  }
+  const nSide = (SPAN-GUARD+1)*2;
   const side  = up + lo;
-  const ratio = side / Math.max(car, 1e-20);
+  const ratio = (side/nSide) / Math.max(car, 1e-20);
+  const rRef  = (ref/Math.max(nRef,1)) / Math.max(car, 1e-20);
 
   if(S.calibrating){
-    S.calSamples.push(ratio);
+    S.calSamples.push([ratio, rRef]);
     if(S.calSamples.length >= 16){
-      const s = S.calSamples.slice().sort((x,y)=>x-y);
-      S.base = s[Math.floor(s.length/2)];
+      const med = j => {
+        const s = S.calSamples.map(x=>x[j]).sort((a,b)=>a-b);
+        return s[Math.floor(s.length/2)];
+      };
+      S.base = med(0); S.baseRef = med(1);
       S.calibrating = false;
     }
-    return {db:0, dir:0, cal:true};
+    return {db:0, dir:0, ref:0, cal:true};
   }
-  if(S.base === null) return {db:0, dir:0, cal:true};
+  if(S.base === null) return {db:0, dir:0, ref:0, cal:true};
 
-  const db  = 10 * Math.log10(Math.max(ratio,1e-20) / Math.max(S.base,1e-20));
+  const dbSide = 10*Math.log10(Math.max(ratio,1e-20) / Math.max(S.base,1e-20));
+  const dbRef  = 10*Math.log10(Math.max(rRef ,1e-20) / Math.max(S.baseRef,1e-20));
+
+  /* Rechazo de modo común.
+     Un golpe en la mesa es banda ancha: sube las bandas laterales Y la referencia.
+     Un reflejo Doppler solo puede vivir cerca de la portadora: sube laterales, no referencia.
+     Restando la referencia queda únicamente lo que la física permite atribuir a un cuerpo. */
+  const db = dbSide - dbRef;
   const dir = (up - lo) / Math.max(up + lo, 1e-20);
-  return {db, dir, cal:false};
+  return {db, dir, ref:dbRef, raw:dbSide, cal:false};
 }
 
-/* Conteo. La señal es real; la calibración del conteo es del Estado. */
+/* Ocupación sostenida. Un pico instantáneo no alcanza para declarar un cuerpo:
+   subir de nivel exige que la condición se mantenga, y bajar exige más todavía.
+   Así funciona cualquier sensor de ocupación serio, y así deja de saltar a 4. */
 function tally(db, now){
-  if(db > S.thr) S.lastHit = now;
-  S.peak = Math.max(db, S.peak * 0.985);
-  const held = (now - S.lastHit) < S.HOLD;
+  S.ema += (db - S.ema) * 0.06;
+  const t = S.thr;
+  let target = 0;
+  if(S.ema > t)       target = 1;
+  if(S.ema > t * 3.0) target = 2;
+  if(S.ema > t * 5.5) target = 3;
+
+  if(target === S.pend) S.pendN++;
+  else { S.pend = target; S.pendN = 1; }
+
+  const need = target > S.level ? 20 : 110;   // sube rápido, suelta lento (latch)
+  if(S.pendN >= need) S.level = target;
+
   if(S.forced !== null) return S.forced;
-  if(!held) { S.peak = Math.min(S.peak, S.thr); return 0 + S.ghost * 0; }
-  const p = S.peak, t = S.thr;
-  let n = 1;
-  if(p > t * 2.4) n = 2;
-  if(p > t * 3.6) n = 3;
-  if(p > t * 5.0) n = 4;
-  return n + S.ghost;
+  return S.level + S.ghost;
+}
+
+/* ══════════════ FMCW · radar de rango por filtro adaptado ══════════════
+   Se emite un barrido lineal 17→22 kHz que se repite sin discontinuidad de fase.
+   Lo que vuelve se correlaciona contra la plantilla en cuadratura: el retardo del
+   pico es el tiempo de vuelo, y el tiempo de vuelo es distancia.
+
+     Resolución de rango   c/(2·B)   = 343/(2·5000)  = 3,4 cm
+     Paso por muestra      c/(2·fs)  = 343/(2·48000) = 3,57 mm
+     Alcance (RNG lags)                              ≈ 2,0 m
+
+   El pico más fuerte es el camino directo parlante→micrófono: ese es el cero de la
+   regla. Se promedia el perfil para aprender el clutter estático (paredes, mesa,
+   monitor) y se lo resta. Lo que sobrevive a la resta es lo que se mueve.        */
+const FM = {
+  N:1024, RNG:560, F1:17000, F2:22000,
+  tplI:null, tplQ:null, lags:0,
+  sp:null, gain:null, mute:null, txSrc:null,
+  prof:null, clut:null, mov:null, work:null,
+  l0:0, learn:0, sens:9, peakK:0, peakV:0, targets:0,
+  mmPerLag:0, cps:0, ready:false
+};
+
+function fmInit(fs){
+  const N = FM.N;
+  // F2 se corrige para que el barrido cierre en un número entero de ciclos:
+  // así el bucle no produce discontinuidad de fase (ni chasquido audible).
+  const cyc = Math.round((N/fs) * (FM.F1 + 22000) / 2);
+  FM.F2 = 2*cyc*fs/N - FM.F1;
+
+  FM.tplI = new Float32Array(N);
+  FM.tplQ = new Float32Array(N);
+  const T = N/fs, k = (FM.F2 - FM.F1)/T;
+  for(let n=0;n<N;n++){
+    const t = n/fs;
+    const ph = 2*Math.PI*(FM.F1*t + 0.5*k*t*t);
+    const w  = 0.5 - 0.5*Math.cos(2*Math.PI*n/(N-1));   // Hann: baja lóbulos laterales
+    FM.tplI[n] = Math.cos(ph)*w;
+    FM.tplQ[n] = Math.sin(ph)*w;
+  }
+  FM.lags = N + FM.RNG;
+  FM.prof = new Float32Array(FM.lags);
+  FM.clut = new Float32Array(FM.RNG);
+  FM.mov  = new Float32Array(FM.RNG);
+  FM.work = new Float32Array(4096);
+  FM.mmPerLag = C_SOUND/(2*fs)*1000;
+  FM.cps = fs/N;
+  FM.learn = 0;
+  FM.ready = false;
+}
+
+function fmTxBuffer(ctx){
+  const fs = ctx.sampleRate, N = FM.N, reps = 96;
+  const b = ctx.createBuffer(1, N*reps, fs);
+  const d = b.getChannelData(0);
+  const T = N/fs, k = (FM.F2 - FM.F1)/T;
+  for(let n=0;n<N;n++){
+    const t = n/fs;
+    d[n] = Math.sin(2*Math.PI*(FM.F1*t + 0.5*k*t*t));
+  }
+  for(let r=1;r<reps;r++) d.copyWithin(r*N, 0, N);
+  return b;
+}
+
+function fmStart(){
+  const ctx = S.ctx, fs = ctx.sampleRate;
+  fmInit(fs);
+
+  FM.txSrc = ctx.createBufferSource();
+  FM.txSrc.buffer = fmTxBuffer(ctx);
+  FM.txSrc.loop = true;
+  FM.gain = ctx.createGain();
+  FM.gain.gain.value = 0.10;
+  FM.txSrc.connect(FM.gain).connect(ctx.destination);
+  FM.txSrc.start();
+
+  const src = ctx.createMediaStreamSource(S.stream);
+  FM.sp = ctx.createScriptProcessor(4096, 1, 1);
+  FM.sp.onaudioprocess = fmProcess;
+  FM.mute = ctx.createGain();
+  FM.mute.gain.value = 0;                 // el nodo debe drenar para que corra
+  src.connect(FM.sp).connect(FM.mute).connect(ctx.destination);
+}
+
+function fmStop(){
+  if(FM.sp){ FM.sp.onaudioprocess = null; FM.sp.disconnect(); FM.sp = null; }
+  if(FM.mute){ FM.mute.disconnect(); FM.mute = null; }
+  if(FM.txSrc){ try{FM.txSrc.stop();}catch(e){} FM.txSrc.disconnect(); FM.txSrc = null; }
+  if(FM.gain){ FM.gain.disconnect(); FM.gain = null; }
+}
+
+function fmProcess(ev){
+  const x = ev.inputBuffer.getChannelData(0);
+  const N = FM.N, L = FM.lags, tI = FM.tplI, tQ = FM.tplQ, prof = FM.prof;
+
+  // Filtro adaptado en cuadratura: la magnitud es la envolvente del eco.
+  for(let l=0;l<L;l++){
+    let si=0, sq=0;
+    for(let n=0;n<N;n++){ const v = x[l+n]; si += v*tI[n]; sq += v*tQ[n]; }
+    prof[l] = Math.sqrt(si*si + sq*sq);
+  }
+
+  // Camino directo = pico dentro del primer período. Es el cero de la regla.
+  let best=0, bi=0;
+  for(let l=0;l<N;l++) if(prof[l] > best){ best = prof[l]; bi = l; }
+  FM.l0 = bi;
+
+  const a = FM.learn < 90 ? 0.12 : 0.012;   // aprende rápido, después se aquieta
+  FM.learn++;
+  let pv=0, pk=0, tg=0, prev=0, rising=false;
+  const thr = best * (0.004 + 0.020/FM.sens);
+
+  for(let k=0;k<FM.RNG;k++){
+    const p = prof[bi + k] || 0;
+    FM.clut[k] += (p - FM.clut[k]) * a;
+    const m = Math.max(0, p - FM.clut[k]);
+    FM.mov[k] = m;
+    if(m > pv){ pv = m; pk = k; }
+    if(m > thr && m > prev) rising = true;
+    else if(rising && m < prev){ tg++; rising = false; }
+    prev = m;
+  }
+  FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
+  FM.ready = FM.learn > 30;
+}
+
+/* Cascada rango-tiempo: tiempo en X, distancia en Y, intensidad del móvil en color. */
+const RW = {cv:null, cx:null, w:0, h:0};
+function rwInit(cv){
+  RW.cv = cv; RW.cx = cv.getContext("2d",{alpha:false}); rwSize();
+}
+function rwSize(){
+  if(!RW.cv) return;
+  const r = RW.cv.getBoundingClientRect();
+  const d = Math.min(window.devicePixelRatio||1, 2);
+  RW.w = Math.max(2, Math.floor(r.width*d));
+  RW.h = Math.max(2, Math.floor(r.height*d));
+  RW.cv.width = RW.w; RW.cv.height = RW.h;
+  RW.cx.fillStyle = "#06090C"; RW.cx.fillRect(0,0,RW.w,RW.h);
+}
+function rwPush(){
+  const cx = RW.cx; if(!cx || !FM.mov) return;
+  cx.drawImage(RW.cv, -1, 0);
+  const rows = RW.h, sc = FM.sens * 220;
+  for(let y=0;y<rows;y++){
+    const k = Math.floor(y/rows * FM.RNG);
+    let t = Math.max(0, Math.min(1, FM.mov[k] * sc / Math.max(FM.mov.length,1)));
+    t = Math.pow(t, .62);
+    const R = Math.round(14 + 241*t);
+    const G = Math.round(18 + 150*t*t);
+    const B = Math.round(26 +  74*t*t*t);
+    cx.fillStyle = `rgb(${R},${G},${B})`;
+    cx.fillRect(RW.w-1, y, 1, 1);
+  }
 }
 
 /* ══════════════ Espectrograma ══════════════ */
@@ -569,7 +809,8 @@ function trPush(v, color){
 
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
-const views = {land:$("v-land"), consola:$("v-consola"), solo:$("v-solo"), gate:$("v-gate")};
+const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
+               solo:$("v-solo"), gate:$("v-gate")};
 let current = "land", pending = null, opTimer = null;
 
 function show(v){
@@ -583,6 +824,7 @@ function goto(mode){
   location.hash = mode;
   const g = {
     consola : ["Habilitar sensor acústico","El equipo emite un tono de ~19 kHz y escucha su propio reflejo. No graba audio: mide la deformación del canal.","Iniciar relevamiento"],
+    radar   : ["Habilitar radar de rango","Barrido FMCW de 17 a 22 kHz. El retardo del eco es tiempo de vuelo, y el tiempo de vuelo es distancia. Quedate quieto los primeros segundos: está aprendiendo las paredes.","Iniciar telemetría"],
     terminal: ["Habilitar sensor acústico","Tu teléfono va a emitir un tono que no vas a oír y escuchar cómo vuelve. Cuando te movés, vuelve distinto.","Relevarme"],
     velo    : ["Activar contramedida","El velo emite ruido de banda ancha en 17–22 kHz. Inutiliza cualquier relevamiento acústico del ambiente, incluido el nuestro.","Activar velo"],
     contra  : ["Habilitar escucha pasiva","No emite nada. Solo escucha la banda 17–22 kHz buscando balizas ultrasónicas de terceros.","Iniciar auditoría"]
@@ -626,7 +868,24 @@ async function launch(){
   S.mode = mode; S.running = true; S.n = 0;
   S.forced = null; S.ghost = 0; S.peak = 0; S.lastHit = 0;
 
-  if(mode === "consola"){
+  if(mode === "radar"){
+    show("radar");
+    rwInit($("rwf"));
+    fmStart();
+    $("r-sr").textContent  = (S.ctx.sampleRate/1000).toFixed(1) + " kHz";
+    $("r-cps").textContent = FM.cps.toFixed(1);
+    $("r-res").textContent = (C_SOUND/(2*(FM.F2-FM.F1))*100).toFixed(1) + " cm";
+    $("r-max").textContent = (FM.RNG*FM.mmPerLag/1000).toFixed(2) + " m";
+    $("r-b").textContent   = ((FM.F2-FM.F1)/1000).toFixed(2) + " kHz";
+    const sc = $("r-scale");
+    sc.innerHTML = "<span>0,00 m<br>SENSOR</span><span>" +
+      (FM.RNG*FM.mmPerLag/2000).toFixed(2) + " m</span><span>" +
+      (FM.RNG*FM.mmPerLag/1000).toFixed(2) + " m</span>";
+    $("ropbar").style.opacity = "1";
+    clearTimeout(opTimer);
+    opTimer = setTimeout(()=>{ $("ropbar").style.opacity = "0"; }, 9000);
+  }
+  else if(mode === "consola"){
     show("consola");
     wfInit($("wf"));
     emitOn(); calibrate();
@@ -669,7 +928,7 @@ function addBtn(host, label, fn){
 
 function stopAll(){
   S.running = false;
-  emitOff(); jamOff();
+  emitOff(); jamOff(); fmStop();
   if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream = null; S.analyser = null; }
   $("s-big").classList.remove("pulse");
 }
@@ -680,6 +939,27 @@ function loop(){
   requestAnimationFrame(loop);
   const now = performance.now();
 
+  if(S.mode === "radar"){
+    rwPush();
+    const d  = FM.peakK * FM.mmPerLag / 1000;
+    const on = FM.ready && FM.peakV > (0.0015 + 0.006/FM.sens);
+    const ds = d.toFixed(2).replace(".", ",");
+    const dE = $("r-dist"), vE = $("r-verdict");
+    dE.textContent = on ? ds + " m" : "—";
+    dE.classList.toggle("zero", !on);
+    vE.classList.toggle("hit", on);
+    vE.textContent = !FM.ready ? "APRENDIENDO CLUTTER ESTÁTICO…"
+      : on ? "BLANCO MÓVIL A " + ds + " m DEL SENSOR"
+           : "SIN BLANCOS MÓVILES EN EL VOLUMEN";
+    $("r-amp").textContent  = (FM.peakV*1000).toFixed(1);
+    $("r-bar").style.right  = (100 - Math.max(0,Math.min(100, FM.peakV*8000))) + "%";
+    $("r-tg").textContent   = on ? FM.targets : 0;
+    $("r-l0").textContent   = FM.l0 + " muestras";
+    $("r-cl").textContent   = FM.learn < 90 ? "APRENDIENDO" : "FIJADO";
+    $("r-dot").className    = "dot " + (on ? "live" : "");
+    $("r-state").textContent = !FM.ready ? "CALIBRANDO" : on ? "BLANCO ADQUIRIDO" : "BARRIENDO";
+    return;
+  }
   if(S.mode === "velo"){ trPush(0.45 + Math.random()*0.5, "#C4453A"); return; }
   if(!S.analyser && !S.archive) return;
 
@@ -700,6 +980,9 @@ function loop(){
       : "OCUPACIÓN CONFIRMADA — " + n + " CUERPOS";
     $("c-db").textContent   = (m.db>=0?"+":"") + m.db.toFixed(1) + " dB";
     $("c-bar").style.right  = (100 - Math.max(0,Math.min(100, m.db/20*100))) + "%";
+    $("c-ref").textContent  = m.cal ? "—" : ((m.ref>=0?"+":"") + m.ref.toFixed(1) + " dB");
+    $("c-rej").textContent  = m.cal ? "—"
+      : (m.ref > 2.5 ? "TRANSITORIO DESCARTADO" : "ACTIVO");
     $("c-dir").textContent  = Math.abs(m.dir)<.08 ? "ESTACIONARIO"
                             : m.dir>0 ? "SE ACERCA" : "SE ALEJA";
     $("c-f0").textContent   = (S.f0/1000).toFixed(2) + " kHz";
@@ -752,6 +1035,7 @@ document.addEventListener("click", e=>{
   const a = e.target.closest("[data-act]");
   if(!a) return;
   if(a.dataset.act === "cal") calibrate();
+  if(a.dataset.act === "clut"){ FM.learn = 0; FM.ready = false; }
   if(a.dataset.act === "jam"){
     S.jamming ? jamOff() : jamOn();
     a.classList.toggle("on", S.jamming);
@@ -802,7 +1086,21 @@ $("c-thr").addEventListener("input", e=>{
   $("c-thv").textContent = S.thr.toFixed(1)+" dB";
 });
 
+$("r-sens").addEventListener("input", e=>{
+  FM.sens = +e.target.value;
+  $("r-sv").textContent = "×" + FM.sens;
+});
+$("r-gain").addEventListener("input", e=>{
+  if(FM.gain) FM.gain.gain.value = +e.target.value/100;
+});
+
 document.addEventListener("keydown", e=>{
+  if(current === "radar"){
+    const r = e.key.toLowerCase();
+    if(r === "k"){ FM.learn = 0; FM.ready = false; }
+    if(r === "h"){ const o=$("ropbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
+    return;
+  }
   if(current !== "consola") return;
   const k = e.key.toLowerCase();
   if(k >= "1" && k <= "9"){ S.forced = +k; S.ghost = 0; }
@@ -814,13 +1112,17 @@ document.addEventListener("keydown", e=>{
   else if(k === "h"){ const o=$("opbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
 });
 
-window.addEventListener("resize", ()=>{ if(current==="consola") wfSize(); });
+window.addEventListener("resize", ()=>{
+  if(current === "consola") wfSize();
+  if(current === "radar")   rwSize();
+});
 
 $("c-f0v").textContent = "19.00 kHz";
 $("c-thv").textContent = "3.5 dB";
+$("r-sv").textContent  = "×9";
 $("exp").textContent = "EXP. 17622/26 — FORM. C-4 ANEXO II — " +
   new Date().toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
 
 const h = location.hash.replace("#","");
-if(["consola","terminal","velo","contra"].includes(h)) goto(h);
+if(["consola","radar","terminal","velo","contra"].includes(h)) goto(h);
 </script>
