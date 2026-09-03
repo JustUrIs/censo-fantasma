@@ -192,6 +192,57 @@
   }
   .back:hover{color:var(--ink);border-color:var(--amber)}
 
+  /* ---------- certificado (papel: rompe con el resto a propósito) ---------- */
+  .cert-wrap{position:absolute;inset:0;overflow-y:auto;display:flex;flex-direction:column;
+    align-items:center;gap:16px;padding:22px 16px 40px}
+  .cert{
+    width:min(560px,100%);background:#F2EEE3;color:#14171C;
+    padding:30px 30px 24px;border:1px solid #C8C0AE;
+    box-shadow:0 18px 44px rgba(0,0,0,.55);position:relative;
+  }
+  .cert::before{
+    content:"";position:absolute;inset:9px;border:1px solid #C8C0AE;pointer-events:none;
+  }
+  .cert-hd{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+    border-bottom:2px solid #14171C;padding-bottom:9px}
+  .cert-hd .o{font-family:var(--mono);font-weight:700;font-size:12px;letter-spacing:.16em}
+  .cert-hd .x{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;color:#5C6472;text-align:right}
+  .cert h3{font-family:var(--mono);font-weight:700;font-size:clamp(19px,4.6vw,26px);
+    letter-spacing:-.01em;margin:20px 0 4px;line-height:1.12}
+  .cert .lead{font-size:12.5px;line-height:1.55;color:#3E4550;margin:0 0 18px}
+  .cert dl{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;margin:0 0 18px;
+    font-family:var(--mono);font-size:11.5px}
+  .cert dt{color:#6B7280;letter-spacing:.08em;text-transform:uppercase;font-size:9.5px;padding-top:2px}
+  .cert dd{margin:0;font-weight:600;word-break:break-all}
+  .cert .decl{border-top:1px solid #C8C0AE;border-bottom:1px solid #C8C0AE;
+    padding:13px 0;font-size:13px;line-height:1.6;margin-bottom:16px}
+  .cert .decl b{background:#14171C;color:#F2EEE3;padding:1px 6px;font-family:var(--mono);font-size:12px}
+  .bars{display:flex;align-items:flex-end;gap:1.5px;height:44px;margin-bottom:6px}
+  .bars i{background:#14171C;display:block;height:100%}
+  .cert .code{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:#5C6472}
+  .stamp{
+    position:absolute;right:22px;bottom:74px;width:118px;height:118px;border-radius:50%;
+    border:2.5px solid #B03A30;color:#B03A30;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;transform:rotate(-13deg);
+    font-family:var(--mono);text-align:center;opacity:.86;pointer-events:none;
+  }
+  .stamp b{font-size:19px;font-weight:700;letter-spacing:.04em;line-height:1}
+  .stamp span{font-size:7.5px;letter-spacing:.13em;line-height:1.3}
+  .cert-form{width:min(560px,100%);display:flex;gap:8px;flex-wrap:wrap}
+  .cert-form input{
+    flex:1 1 200px;background:var(--panel);border:1px solid var(--line);color:var(--ink);
+    font:400 14px/1 var(--sans);padding:12px 13px;
+  }
+  .cert-form input:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+  .hint{width:min(560px,100%);font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--ink-faint)}
+
+  @media print{
+    body{background:#fff;overflow:visible}
+    body::after,.seal,.legal,.back,.cert-form,.hint,.btns{display:none!important}
+    .cert-wrap{position:static;padding:0}
+    .cert{box-shadow:none;width:100%}
+  }
+
   @media(max-width:820px){
     .inst{grid-template-columns:1fr;grid-template-rows:minmax(150px,1fr) auto auto}
     .scope{border-right:0;border-bottom:1px solid var(--line)}
@@ -246,6 +297,11 @@
             <span class="n">MÓDULO 04 · AUDITORÍA</span>
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
+          </button>
+          <button class="tile" data-go="cert" style="--tint:var(--ink-dim)">
+            <span class="n">MÓDULO 06 · MESA DE ENTRADAS</span>
+            <span class="t">Certificado de No Existencia</span>
+            <span class="d">Trámite. El Estado no puede acreditar que estuviste: solo que no fuiste detectado.</span>
           </button>
         </div>
 
@@ -317,6 +373,62 @@
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ CERTIFICADO ============ -->
+    <section id="v-cert" hidden>
+      <button class="back" data-go="land">← Menú</button>
+      <div class="cert-wrap">
+        <div class="cert-form">
+          <input id="ct-name" type="text" maxlength="42" placeholder="Apellido y nombre (opcional)" autocomplete="off">
+          <button class="b" id="ct-go">Emitir certificado</button>
+        </div>
+        <div class="hint">
+          El organismo no puede acreditar que una persona estuvo en un lugar. Solo puede
+          acreditar que <b>no fue detectada</b>. Este instrumento hace lo segundo.
+        </div>
+
+        <article class="cert" id="ct-doc">
+          <div class="cert-hd">
+            <span class="o">INDEC · REPÚBLICA ARGENTINA</span>
+            <span class="x" id="ct-exp">EXP. —</span>
+          </div>
+          <h3>Certificado de<br>No Existencia Registrada</h3>
+          <p class="lead">
+            Dirección Nacional de Teledetección Habitacional · Sistema Estadístico Nacional.
+            Emitido conforme al régimen de secreto estadístico establecido por la Ley 17.622,
+            artículo 10.
+          </p>
+          <dl>
+            <dt>Sujeto</dt><dd id="ct-sub">—</dd>
+            <dt>Volumen relevado</dt><dd id="ct-vol">—</dd>
+            <dt>Fecha y hora</dt><dd id="ct-dt">—</dd>
+            <dt>Coef. de ausencia</dt><dd id="ct-coef">—</dd>
+            <dt>Huella SHA-256</dt><dd id="ct-hash">—</dd>
+          </dl>
+          <div class="decl">
+            Se deja constancia de que el sujeto identificado <b>NO FUE DETECTADO</b> en el
+            volumen relevado durante el período indicado. El presente certificado no acredita
+            ausencia física: acredita ausencia de registro. La distinción es del organismo.
+          </div>
+          <div class="bars" id="ct-bars"></div>
+          <div class="code" id="ct-code">—</div>
+          <div class="stamp">
+            <b>NO CONSTA</b>
+            <span>DIR. NAC. DE</span>
+            <span>TELEDETECCIÓN</span>
+          </div>
+        </article>
+
+        <div class="btns">
+          <button class="b" id="ct-share">Compartir</button>
+          <button class="b" id="ct-print">Imprimir</button>
+        </div>
+        <div class="hint">
+          Para guardarlo: sacale una captura de pantalla. Es el único formato que el
+          organismo reconoce.
+        </div>
       </div>
     </section>
 
@@ -822,7 +934,50 @@ function trPush(v, color){
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
-               solo:$("v-solo"), gate:$("v-gate")};
+               solo:$("v-solo"), cert:$("v-cert"), gate:$("v-gate")};
+
+/* ══════════════ Certificado de No Existencia ══════════════
+   El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
+   registro. La huella hace el documento verificable y no reproducible.        */
+async function sha256Hex(txt){
+  try{
+    const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+    return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  }catch(e){
+    return Array.from({length:64},()=>"0123456789abcdef"[(Math.random()*16)|0]).join("");
+  }
+}
+
+async function certIssue(){
+  const nm  = ($("ct-name").value || "").trim().toUpperCase().slice(0,42);
+  const now = new Date();
+  const hex = await sha256Hex([
+    nm || "SUJETO NO IDENTIFICADO", now.toISOString(),
+    navigator.language || "", screen.width + "x" + screen.height
+  ].join("|"));
+
+  const exp = String(parseInt(hex.slice(0,6),16) % 1000000).padStart(6,"0");
+  const coef = (0.9 + parseInt(hex.slice(6,8),16)/2560).toFixed(4).replace(".", ",");
+
+  $("ct-exp").textContent  = "EXP. " + exp + "/26 — FORM. C-4 BIS";
+  $("ct-sub").textContent  = nm || "SUJETO NO IDENTIFICADO";
+  $("ct-vol").textContent  = "DOMICILIO DEL RELEVAMIENTO — RADIO CENSAL 02-114";
+  $("ct-dt").textContent   = now.toLocaleString("es-AR",{dateStyle:"long",timeStyle:"medium"});
+  $("ct-coef").textContent = coef + " — CONCLUYENTE";
+  $("ct-hash").textContent = hex.slice(0,48) + "…";
+  $("ct-code").textContent = (hex.slice(0,4)+" "+hex.slice(4,8)+" "+hex.slice(8,12)+" "+
+                              hex.slice(12,16)).toUpperCase();
+
+  // Barras derivadas de la huella: mismo hash, mismo código de barras.
+  const bars = $("ct-bars"); bars.innerHTML = "";
+  for(let i=0;i<52;i++){
+    const n = parseInt(hex[i % hex.length], 16);
+    const b = document.createElement("i");
+    b.style.width  = (1 + (n % 4)) + "px";
+    b.style.height = (52 + (n*3) % 48) + "%";
+    bars.appendChild(b);
+  }
+}
 let current = "land", pending = null, opTimer = null;
 
 function show(v){
@@ -832,6 +987,7 @@ function show(v){
 
 function goto(mode){
   if(mode === "land"){ stopAll(); show("land"); location.hash=""; return; }
+  if(mode === "cert"){ stopAll(); show("cert"); location.hash = "cert"; certIssue(); return; }
   pending = mode;
   location.hash = mode;
   const g = {
@@ -1098,6 +1254,20 @@ $("c-thr").addEventListener("input", e=>{
   $("c-thv").textContent = S.thr.toFixed(1)+" dB";
 });
 
+$("ct-go").addEventListener("click", certIssue);
+$("ct-name").addEventListener("keydown", e=>{ if(e.key === "Enter") certIssue(); });
+$("ct-print").addEventListener("click", ()=>window.print());
+$("ct-share").addEventListener("click", async ()=>{
+  const txt = "El INDEC certifica que no fui detectado. " + $("ct-exp").textContent +
+              " · Censo Fantasma";
+  try{
+    if(navigator.share) await navigator.share({title:"Certificado de No Existencia",
+                                               text:txt, url:location.href});
+    else { await navigator.clipboard.writeText(txt + " " + location.href);
+           $("ct-share").textContent = "Copiado"; }
+  }catch(e){ /* el usuario canceló */ }
+});
+
 $("r-sens").addEventListener("input", e=>{
   FM.sens = +e.target.value;
   $("r-sv").textContent = "×" + FM.sens;
@@ -1136,5 +1306,5 @@ $("exp").textContent = "EXP. 17622/26 — FORM. C-4 ANEXO II — " +
   new Date().toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
 
 const h = location.hash.replace("#","");
-if(["consola","radar","terminal","velo","contra"].includes(h)) goto(h);
+if(["consola","radar","terminal","velo","contra","cert"].includes(h)) goto(h);
 </script>
