@@ -1017,8 +1017,22 @@ function goto(mode){
   $("g-text").textContent  = g[1];
   $("g-btn").textContent   = g[2];
   $("g-err").hidden = true;
+  $("g-alt").hidden = true;
+
+  /* Si el permiso ya está otorgado, la pantalla de autorización es un click de más.
+     En escenario eso importa: cambiar de módulo tiene que ser inmediato. El click
+     sobre la ficha es el gesto de usuario que habilita el AudioContext. */
+  if(micGranted || mode === "velo"){ launch(); return; }
   show("gate");
 }
+
+let micGranted = false;
+navigator.permissions?.query({name:"microphone"})
+  .then(p => {
+    micGranted = p.state === "granted";
+    p.onchange = () => { micGranted = p.state === "granted"; };
+  })
+  .catch(()=>{});   // Firefox no expone el permiso de micrófono: queda la puerta
 
 function micDiag(err){
   const name = err && err.name ? err.name : "Error";
@@ -1047,11 +1061,14 @@ async function launch(){
   try{
     await audioUp(mode !== "velo");
   }catch(err){
+    micGranted = false;
     const e = $("g-err"); e.hidden = false;
     e.textContent = micDiag(err);
     $("g-alt").hidden = false;
+    show("gate");                 // puede que hayamos salteado la puerta
     return;
   }
+  micGranted = true;
   S.mode = mode; S.running = true; S.n = 0;
   S.forced = null; S.ghost = 0; S.peak = 0; S.lastHit = 0;
 
