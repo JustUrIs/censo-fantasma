@@ -413,7 +413,9 @@
           <div class="row"><dt>Paquetes por segundo</dt><dd class="acc" id="k-pps">—</dd></div>
           <div class="row"><dt>Canal en barrido</dt><dd class="cel" id="k-ch">—</dd></div>
           <div class="row"><dt>Pico de la sesión</dt><dd id="k-peak">—</dd></div>
-          <div class="row"><dt>Ventana de presencia</dt><dd>60 s</dd></div>
+          <div class="row"><dt>Descartados por lejanía</dt><dd id="k-lejos">—</dd></div>
+          <div class="row"><dt>Alcance del recuento</dt><dd class="cel" id="k-umbral">—</dd></div>
+          <div class="row"><dt>Ventana de presencia</dt><dd>25 s</dd></div>
           <div class="row"><dt>Direcciones</dt><dd class="cel">HASHEADAS AL LEER</dd></div>
           <div class="row"><dt>Almacenamiento</dt><dd class="cel">NINGUNO</dd></div>
         </dl>
@@ -798,6 +800,7 @@ const FM = {
   sp:null, gain:null, mute:null, txSrc:null,
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
+  dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
 };
 
@@ -913,6 +916,18 @@ function fmProcess(ev){
     prev = m;
   }
   FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
+
+  /* Estabilizacion. El pico crudo salta de bin en bin cuadro a cuadro y el
+     numero se vuelve ilegible. Se suaviza la posicion, se suaviza la fuerza,
+     y ademas el valor mostrado solo se refresca 3 veces por segundo: un numero
+     que cambia 14 veces por segundo no se puede leer aunque sea correcto.     */
+  const fuerte = FM.peakV > 0.002;
+  if(fuerte){
+    if(FM.hold <= 0) FM.dEma = pk;                 // primer enganche: salto directo
+    else             FM.dEma += (pk - FM.dEma) * 0.14;
+    FM.hold = 26;                                  // ~2 s de retencion
+  } else if(FM.hold > 0) FM.hold--;
+  FM.vEma += (FM.peakV - FM.vEma) * 0.12;
   FM.ready = FM.learn > 30;
 }
 
@@ -955,7 +970,7 @@ function rwPush(){
      #ROLE,... #INFO,... #ERROR,...        ← metadatos                             */
 const KS = {
   port:null, reader:null, keep:false, buf:"", role:null, sens:12,
-  uniq:0, pps:0, ch:0, peak:0, hist:[],                     // sniffer
+  uniq:0, pps:0, ch:0, peak:0, hist:[], lejos:0, umbral:0,   // sniffer
   amps:null, res:null, n:0, base:null, learn:0, dist:0,     // csi
   rssi:0, frames:0, fps:0, tFps:0
 };
@@ -1046,6 +1061,7 @@ function kLine(l){
   const p = l.split(",");
   if(p[0] === "S"){
     KS.uniq = +p[1]||0; KS.pps = +p[2]||0; KS.ch = +p[3]||0;
+    KS.lejos = +p[4]||0; KS.umbral = +p[5]||0;
     if(KS.uniq > KS.peak) KS.peak = KS.uniq;
     KS.hist.push(KS.uniq); if(KS.hist.length > 900) KS.hist.shift();
     if(KS.role !== "SNIFFER") kRole("SNIFFER");
@@ -1122,10 +1138,12 @@ function kTick(){
     cE.classList.toggle("zero", KS.uniq === 0);
     vE.classList.toggle("hit", KS.uniq > 0);
     vE.textContent = KS.uniq === 0 ? "BARRIENDO EL ESPECTRO…"
-      : KS.uniq + " EMISORES ÚNICOS · NINGUNO SE CONECTÓ A NOSOTROS";
+      : KS.uniq + " APARATOS EN ESTA SALA · NINGUNO SE CONECTÓ A NOSOTROS";
     $("k-pps").textContent  = KS.pps;
     $("k-ch").textContent   = "CANAL " + KS.ch;
     $("k-peak").textContent = KS.peak;
+    $("k-lejos").textContent  = KS.lejos;
+    $("k-umbral").textContent = KS.umbral ? "ESTA SALA (" + KS.umbral + " dBm)" : "—";
     $("k-dot").className    = "dot live";
     $("k-state").textContent = "RELEVANDO";
   }
@@ -1423,8 +1441,11 @@ function loop(){
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
-    const d  = FM.peakK * FM.mmPerLag / 1000;
-    const on = FM.ready && FM.peakV > (0.0015 + 0.006/FM.sens);
+    const on = FM.ready && FM.hold > 0 && FM.vEma > (0.0012 + 0.005/FM.sens);
+    // El numero en pantalla se refresca 3 veces por segundo, no 14.
+    if(on && now - FM.tShow > 320){ FM.shown = FM.dEma * FM.mmPerLag / 1000; FM.tShow = now; }
+    if(!on) FM.shown = 0;
+    const d  = FM.shown;
     const ds = d.toFixed(2).replace(".", ",");
     const dE = $("r-dist"), vE = $("r-verdict");
     dE.textContent = on ? ds + " m" : "—";
@@ -1433,8 +1454,8 @@ function loop(){
     vE.textContent = !FM.ready ? "APRENDIENDO CLUTTER ESTÁTICO…"
       : on ? "BLANCO MÓVIL A " + ds + " m DEL SENSOR"
            : "SIN BLANCOS MÓVILES EN EL VOLUMEN";
-    $("r-amp").textContent  = (FM.peakV*1000).toFixed(1);
-    $("r-bar").style.right  = (100 - Math.max(0,Math.min(100, FM.peakV*8000))) + "%";
+    $("r-amp").textContent  = (FM.vEma*1000).toFixed(1);
+    $("r-bar").style.right  = (100 - Math.max(0,Math.min(100, FM.vEma*8000))) + "%";
     $("r-tg").textContent   = on ? FM.targets : 0;
     $("r-l0").textContent   = FM.l0 + " muestras";
     $("r-cl").textContent   = FM.learn < 90 ? "APRENDIENDO" : "FIJADO";
