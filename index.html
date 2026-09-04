@@ -923,6 +923,7 @@ const FM = {
   sp:null, gain:null, mute:null, txSrc:null,
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
+  buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
 };
@@ -951,6 +952,8 @@ function fmInit(fs){
   FM.clut = new Float32Array(FM.RNG);
   FM.mov  = new Float32Array(FM.RNG);
   FM.work = new Float32Array(4096);
+  FM.buf  = new Float32Array(8192);   // ventana continua para procesar fuera del audio
+  FM.fresco = false; FM.piso = 0; FM.glitch = 0;
   FM.mmPerLag = C_SOUND/(2*fs)*1000;
   FM.cps = fs/N;
   FM.learn = 0;
@@ -985,7 +988,7 @@ function fmStart(){
 
   const src = ctx.createMediaStreamSource(S.stream);
   FM.sp = ctx.createScriptProcessor(4096, 1, 1);
-  FM.sp.onaudioprocess = fmProcess;
+  FM.sp.onaudioprocess = fmCapturar;
   FM.mute = ctx.createGain();
   FM.mute.gain.value = 0;                 // el nodo debe drenar para que corra
   src.connect(FM.sp).connect(FM.mute).connect(ctx.destination);
@@ -998,8 +1001,22 @@ function fmStop(){
   if(FM.gain){ FM.gain.disconnect(); FM.gain = null; }
 }
 
-function fmProcess(ev){
+/* El callback de audio SOLO copia. Antes hacia 1,2 millones de multiplicaciones
+   acá adentro, en el hilo principal: el callback se pasaba de su presupuesto, el
+   audio se cortaba, la alineación con el barrido se perdía y todo lo de abajo
+   quedaba midiendo ruido. Ahora la cuenta pesada corre en el bucle de dibujo.   */
+function fmCapturar(ev){
   const x = ev.inputBuffer.getChannelData(0);
+  if(!FM.buf) return;
+  FM.buf.copyWithin(0, 4096);          // desliza; 4096 es multiplo exacto del barrido
+  FM.buf.set(x, 4096);
+  if(FM.fresco) FM.glitch++;           // no llegamos a procesar el bloque anterior
+  FM.fresco = true;
+}
+
+function fmProcess(){
+  const x = FM.buf;
+  if(!x) return;
   const N = FM.N, tI = FM.tplI, tQ = FM.tplQ, prof = FM.prof;
 
   /* El bloque de captura (4096) es múltiplo exacto del barrido (1024), así que el
@@ -1041,7 +1058,14 @@ function fmProcess(ev){
     else if(rising && m < prev){ tg++; rising = false; }
     prev = m;
   }
+  FM.best = best; FM.pvRaw = pv;
   FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
+
+  // Piso de ruido medido, no constante magica: mediana aproximada del residuo.
+  let acum = 0;
+  for(let k=0;k<FM.RNG;k+=7) acum += FM.mov[k];
+  const mediaMov = acum / Math.ceil(FM.RNG/7);
+  FM.piso += (mediaMov - FM.piso) * 0.02;
 
   // Alimenta el seguimiento de fase: una muestra por bin seguido, por cuadro.
   if(BR.activo && BR.hist){
@@ -1059,7 +1083,7 @@ function fmProcess(ev){
      numero se vuelve ilegible. Se suaviza la posicion, se suaviza la fuerza,
      y ademas el valor mostrado solo se refresca 3 veces por segundo: un numero
      que cambia 14 veces por segundo no se puede leer aunque sea correcto.     */
-  const fuerte = FM.peakV > 0.002;
+  const fuerte = pv > FM.piso * 2.2 && FM.piso > 0;
   if(fuerte){
     if(FM.hold <= 0) FM.dEma = pk;                 // primer enganche: salto directo
     else             FM.dEma += (pk - FM.dEma) * 0.14;
@@ -1624,6 +1648,14 @@ function labEvento(tipo, nota){
 }
 
 function labTick(now){
+  // El analisis de respiracion vivia solo dentro de brDibujar(), que corre
+  // unicamente en el modulo 08. En el laboratorio se llenaba el historial de
+  // fase y no se analizaba nunca: por eso bpm y confianza salian siempre vacios.
+  if(now - BR.tAnal > 1400){
+    BR.tAnal = now;
+    brAnalizar(FM.cps * (FM.N / 4096));
+  }
+
   // muestreo a 5 Hz
   if(now - LAB.tMuestra >= 200){
     LAB.tMuestra = now;
@@ -1633,6 +1665,12 @@ function labTick(now){
       paso: LAB.i >= 0 && LAB.pasos[LAB.i] ? LAB.pasos[LAB.i].e : "libre",
       dist: dist !== null ? +dist.toFixed(3) : null,
       fuerza: +(FM.vEma*1000).toFixed(3),
+      pv: +(FM.pvRaw||0).toFixed(2),
+      piso: +(FM.piso||0).toFixed(2),
+      snr: FM.piso > 0 ? +(FM.pvRaw/FM.piso).toFixed(2) : null,
+      directo: +(FM.best||0).toFixed(1),
+      l0: FM.l0,
+      glitch: FM.glitch,
       hold: FM.hold > 0 ? 1 : 0,
       bpm:  BR.listo ? +BR.bpm.toFixed(2) : null,
       conf: +(BR.conf||0).toFixed(3),
@@ -1691,6 +1729,7 @@ function labDescargar(){
       mmPorBin: +FM.mmPerLag.toFixed(3),
       alcanceM: +(FM.RNG*FM.mmPerLag/1000).toFixed(2),
       binsRespiracion: BR.bins ? BR.bins.length : 0,
+      glitchesTotales: FM.glitch,
       ventanaRespSeg: FM.cps ? +(BR.NF/(FM.cps*(FM.N/4096))).toFixed(1) : null
     },
     respiracionesContadasPorPersona: real ? +real : null,
@@ -1937,12 +1976,18 @@ function loop(){
   requestAnimationFrame(loop);
   const now = performance.now();
 
+  // Correlación FMCW: fuera del hilo de audio, una vez por bloque nuevo.
+  if(FM.fresco && (S.mode === "radar" || S.mode === "resp" || S.mode === "lab")){
+    FM.fresco = false;
+    fmProcess();
+  }
+
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
-    const on = FM.ready && FM.hold > 0 && FM.vEma > (0.0012 + 0.005/FM.sens);
+    const on = FM.ready && FM.hold > 0 && FM.pvRaw > FM.piso * (2.2 + 18/FM.sens);
     // El numero en pantalla se refresca 3 veces por segundo, no 14.
     if(on && now - FM.tShow > 320){ FM.shown = FM.dEma * FM.mmPerLag / 1000; FM.tShow = now; }
     if(!on) FM.shown = 0;
