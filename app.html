@@ -4,8 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0A0D11">
-<meta name="description" content="INDEC - Direccion Nacional de Teledeteccion Habitacional. Relevamiento pasivo de ocupacion por canal fisico.">
 <title>Censo Fantasma</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@400;500;600;700&display=swap">
 <style>
@@ -310,11 +308,6 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
-          <button class="tile" data-go="resp" style="--tint:var(--alert)">
-            <span class="n">MÓDULO 08 · SIGNOS VITALES</span>
-            <span class="t">Respiración</span>
-            <span class="d">Quedate inmóvil. El tórax se mueve 5&nbsp;mm y eso alcanza para leer tu frecuencia respiratoria.</span>
-          </button>
           <button class="tile" data-go="csi" style="--tint:var(--ok)">
             <span class="n">MÓDULO 07 · ENLACE DE CAMPO</span>
             <span class="t">Canal WiFi (CSI)</span>
@@ -394,53 +387,6 @@
         <span>CANAL <b>ISM 17–22 kHz</b></span>
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
-        <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
-      </div>
-    </section>
-
-    <!-- ============ RESPIRACIÓN ============ -->
-    <section class="inst" id="v-resp" hidden>
-      <div class="scope">
-        <canvas id="bwf"></canvas>
-        <div class="scope-tag">DESPLAZAMIENTO TORÁCICO · FASE DEL ECO, EN MILÍMETROS</div>
-        <div class="scope-scale" id="b-scale"><span>+mm</span><span>0</span><span>&minus;mm</span></div>
-        <div class="opbar" id="bopbar">
-          <k>K</k> reiniciar seguimiento &nbsp; <k>H</k> ocultar panel<br>
-          Sentate inmóvil a ~1 m. Tarda ~25 s en enganchar.
-        </div>
-      </div>
-      <div class="readout">
-        <div class="count-block">
-          <div class="count-label">Respiraciones por minuto</div>
-          <div class="count zero" id="b-bpm">—</div>
-          <div class="verdict" id="b-verdict">ESPERANDO SEÑAL ESTABLE…</div>
-        </div>
-        <dl class="rows">
-          <div class="row"><dt>Confianza</dt><dd class="acc" id="b-conf">—</dd></div>
-          <div class="row"><dt>Nivel</dt><dd style="flex:1"><span class="meter"><i id="b-bar"></i></span></dd></div>
-          <div class="row"><dt>Distancia del tórax</dt><dd class="cel" id="b-dist">—</dd></div>
-          <div class="row"><dt>Amplitud del movimiento</dt><dd id="b-amp">—</dd></div>
-          <div class="row"><dt>Ventana de análisis</dt><dd id="b-win">—</dd></div>
-          <div class="row"><dt>Bins bajo seguimiento</dt><dd id="b-bins">—</dd></div>
-          <div class="row"><dt>Sensibilidad de fase</dt><dd class="cel" id="b-lam">—</dd></div>
-        </dl>
-        <div class="ctl">
-          <div class="btns">
-            <button class="b" data-act="brcal">Reiniciar seguimiento</button>
-          </div>
-          <div class="hint" style="width:auto">
-            El eco vuelve corrido en fase según cuánto se movió lo que rebotó. A 19&nbsp;kHz,
-            5&nbsp;mm de tórax son unos 200° de fase. No busca movimiento: busca
-            <b>periodicidad</b> entre 6 y 36 por minuto, y gana el punto de la sala que respira
-            más limpio.
-          </div>
-        </div>
-      </div>
-      <div class="strip">
-        <span><span class="dot" id="b-dot"></span><b id="b-state">EN ESPERA</b></span>
-        <span>MODO <b>FASE FMCW</b></span>
-        <span>BANDA <b>0,10 &ndash; 0,60 Hz</b></span>
-        <span>MUESTREO <b id="b-fps">&mdash;</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
       </div>
     </section>
@@ -848,7 +794,7 @@ function tally(db, now){
    monitor) y se lo resta. Lo que sobrevive a la resta es lo que se mueve.        */
 const FM = {
   N:1024, RNG:560, F1:17000, F2:22000,
-  tplI:null, tplQ:null, lags:0, profI:null, profQ:null, brI:null, brQ:null,
+  tplI:null, tplQ:null, lags:0,
   sp:null, gain:null, mute:null, txSrc:null,
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
@@ -874,9 +820,7 @@ function fmInit(fs){
     FM.tplQ[n] = Math.sin(ph)*w;
   }
   FM.lags = N + FM.RNG;
-  FM.prof  = new Float32Array(FM.lags);
-  FM.profI = new Float32Array(FM.lags);   // se conserva la parte real...
-  FM.profQ = new Float32Array(FM.lags);   // ...y la imaginaria: ahi vive la fase
+  FM.prof = new Float32Array(FM.lags);
   FM.clut = new Float32Array(FM.RNG);
   FM.mov  = new Float32Array(FM.RNG);
   FM.work = new Float32Array(4096);
@@ -944,7 +888,6 @@ function fmProcess(ev){
   for(let l=lo;l<hi;l++){
     let si=0, sq=0;
     for(let n=0;n<N;n++){ const v = x[l+n]; si += v*tI[n]; sq += v*tQ[n]; }
-    FM.profI[l] = si; FM.profQ[l] = sq;
     prof[l] = Math.sqrt(si*si + sq*sq);
   }
 
@@ -972,18 +915,6 @@ function fmProcess(ev){
   }
   FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
 
-  // Alimenta el seguimiento de fase: una muestra por bin seguido, por cuadro.
-  if(BR.activo && BR.hist){
-    const B = BR.bins.length;
-    if(!FM.brI || FM.brI.length !== B){ FM.brI = new Float32Array(B); FM.brQ = new Float32Array(B); }
-    for(let b=0;b<B;b++){
-      const idx = bi + BR.bins[b];
-      FM.brI[b] = idx < FM.lags ? FM.profI[idx] : 0;
-      FM.brQ[b] = idx < FM.lags ? FM.profQ[idx] : 0;
-    }
-    brPush(FM.brI, FM.brQ);
-  }
-
   /* Estabilizacion. El pico crudo salta de bin en bin cuadro a cuadro y el
      numero se vuelve ilegible. Se suaviza la posicion, se suaviza la fuerza,
      y ademas el valor mostrado solo se refresca 3 veces por segundo: un numero
@@ -996,151 +927,6 @@ function fmProcess(ev){
   } else if(FM.hold > 0) FM.hold--;
   FM.vEma += (FM.peakV - FM.vEma) * 0.12;
   FM.ready = FM.learn > 30;
-}
-
-/* ══════════════ Respiración ══════════════
-   El filtro adaptado ya produce I y Q por cada bin de rango. Hasta ahora se
-   descartaba la fase para quedarse con la magnitud. La fase es justamente donde
-   vive el movimiento milimétrico.
-
-     lambda   = c / f       = 343 / 19500  = 17,6 mm
-     desplaz. = fase * lambda / (4*pi)     (4 y no 2: el camino es ida y vuelta)
-
-   Un torax se mueve ~5 mm al respirar. Eso son ~200 grados de fase: enorme.
-   El problema no es la sensibilidad, es elegir EN QUE bin esta la persona.
-   Por eso no se sigue un bin: se siguen decenas, y gana el que muestra la
-   periodicidad mas limpia dentro de la banda respiratoria.                     */
-const BR = {
-  DEC:8, LO:16, HI:552,          // bins seguidos: cada 8, de 0,06 m a 1,97 m
-  NF:512,                        // muestras de historia por bin (~44 s)
-  bins:[], hist:null, ph:null, prevPh:null, w:0, llenos:0,
-  re:null, im:null, ven:null,
-  bpm:0, conf:0, binMejor:-1, curva:null, tAnal:0, activo:false, listo:false
-};
-
-function brInit(){
-  BR.bins = [];
-  for(let k = BR.LO; k <= BR.HI; k += BR.DEC) BR.bins.push(k);
-  const B = BR.bins.length;
-  BR.hist   = new Float32Array(B * BR.NF);
-  BR.ph     = new Float32Array(B);
-  BR.prevPh = new Float32Array(B);
-  BR.w = 0; BR.llenos = 0;
-  BR.re = new Float32Array(BR.NF);
-  BR.im = new Float32Array(BR.NF);
-  BR.ven = new Float32Array(BR.NF);
-  for(let i=0;i<BR.NF;i++) BR.ven[i] = 0.5 - 0.5*Math.cos(2*Math.PI*i/(BR.NF-1));
-  BR.curva = new Float32Array(BR.NF);
-  BR.bpm = 0; BR.conf = 0; BR.binMejor = -1; BR.listo = false;
-}
-
-/* FFT compleja, radix-2, en el lugar. */
-function fft(re, im){
-  const n = re.length;
-  for(let i=1, j=0; i<n; i++){
-    let bit = n >> 1;
-    for(; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if(i < j){ let t=re[i]; re[i]=re[j]; re[j]=t; t=im[i]; im[i]=im[j]; im[j]=t; }
-  }
-  for(let len=2; len<=n; len<<=1){
-    const ang = -2*Math.PI/len, wr = Math.cos(ang), wi = Math.sin(ang);
-    for(let i=0;i<n;i+=len){
-      let cr = 1, ci = 0;
-      for(let k=0;k<len/2;k++){
-        const ur=re[i+k],        ui=im[i+k];
-        const vr=re[i+k+len/2]*cr - im[i+k+len/2]*ci;
-        const vi=re[i+k+len/2]*ci + im[i+k+len/2]*cr;
-        re[i+k]=ur+vr;         im[i+k]=ui+vi;
-        re[i+k+len/2]=ur-vr;   im[i+k+len/2]=ui-vi;
-        const nr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = nr;
-      }
-    }
-  }
-}
-
-/* Una muestra nueva de fase por bin seguido. Se desenvuelve al vuelo. */
-function brPush(I, Q){
-  const B = BR.bins.length, lam = C_SOUND / ((FM.F1 + FM.F2) / 2) * 1000;  // mm
-  for(let b=0;b<B;b++){
-    const f = Math.atan2(Q[b], I[b]);
-    let d = f - BR.prevPh[b];
-    while(d >  Math.PI) d -= 2*Math.PI;      // desenvolvimiento
-    while(d < -Math.PI) d += 2*Math.PI;
-    BR.prevPh[b] = f;
-    BR.ph[b] += d;
-    BR.hist[b*BR.NF + BR.w] = BR.ph[b] * lam / (4*Math.PI);   // milimetros
-  }
-  BR.w = (BR.w + 1) % BR.NF;
-  if(BR.llenos < BR.NF) BR.llenos++;
-}
-
-/* Busca, entre todos los bins, el que respira mejor. */
-function brAnalizar(fps){
-  const B = BR.bins.length, N = BR.NF;
-  const usar = Math.min(BR.llenos, N);
-  if(usar < 256 || fps < 4) return;
-
-  const df   = fps / N;
-  const kLo  = Math.max(2, Math.round(0.10 / df));   // 6 por minuto
-  const kHi  = Math.min(N/2 - 2, Math.round(0.60 / df));  // 36 por minuto
-  let mejor = -1, mejorPot = 0, mejorK = 0, mejorTot = 1e-9;
-
-  for(let b=0;b<B;b++){
-    const off = b*N;
-    // ventana ordenada en el tiempo + quitar media y tendencia lineal
-    let sx=0, sy=0, sxy=0, sxx=0;
-    for(let i=0;i<usar;i++){
-      const v = BR.hist[off + ((BR.w - usar + i + N) % N)];
-      sx += i; sy += v; sxy += i*v; sxx += i*i;
-    }
-    const den = usar*sxx - sx*sx;
-    const m = den !== 0 ? (usar*sxy - sx*sy)/den : 0;
-    const c = (sy - m*sx)/usar;
-
-    for(let i=0;i<N;i++){
-      if(i < usar){
-        const v = BR.hist[off + ((BR.w - usar + i + N) % N)] - (m*i + c);
-        BR.re[i] = v * BR.ven[i];
-      } else BR.re[i] = 0;
-      BR.im[i] = 0;
-    }
-    fft(BR.re, BR.im);
-
-    let pot=0, kp=0, tot=1e-12;
-    for(let k=kLo;k<=kHi;k++){
-      const p = BR.re[k]*BR.re[k] + BR.im[k]*BR.im[k];
-      tot += p;
-      if(p > pot){ pot = p; kp = k; }
-    }
-    if(pot > mejorPot){ mejorPot = pot; mejor = b; mejorK = kp; mejorTot = tot; }
-  }
-
-  if(mejor < 0){ BR.listo = false; return; }
-
-  // interpolacion parabolica: afina el pico mas alla de la grilla de la FFT
-  const off = mejor*N;
-  for(let i=0;i<N;i++){
-    BR.re[i] = i < usar ? BR.hist[off + ((BR.w - usar + i + N) % N)] * BR.ven[i] : 0;
-    BR.im[i] = 0;
-  }
-  fft(BR.re, BR.im);
-  const mag = k => Math.sqrt(BR.re[k]*BR.re[k] + BR.im[k]*BR.im[k]);
-  const y1 = mag(mejorK-1), y2 = mag(mejorK), y3 = mag(mejorK+1);
-  const dd = (y1 - y3) / (2*(y1 - 2*y2 + y3) || 1e-9);
-  const kFino = mejorK + Math.max(-1, Math.min(1, dd));
-
-  BR.bpm  = kFino * df * 60;
-  BR.conf = mejorPot / mejorTot;              // que tan dominante es ese pico
-  BR.binMejor = BR.bins[mejor];
-  BR.listo = BR.conf > 0.18 && BR.bpm > 5 && BR.bpm < 40;
-
-  // curva para dibujar
-  let sy2=0;
-  for(let i=0;i<usar;i++) sy2 += BR.hist[off + ((BR.w - usar + i + N) % N)];
-  const med = sy2/usar;
-  for(let i=0;i<usar;i++) BR.curva[i] = BR.hist[off + ((BR.w - usar + i + N) % N)] - med;
-  BR.curvaN = usar;
 }
 
 /* Cascada rango-tiempo: tiempo en X, distancia en Y, intensidad del móvil en color. */
@@ -1444,64 +1230,10 @@ function trPush(v, color){
   cx.stroke();
 }
 
-
-/* Dibujo y lectura de la respiración. La curva es el desplazamiento real del
-   tórax en milímetros, no una animación. */
-function brDibujar(now){
-  const cx = RW.cx; if(!cx) return;
-
-  if(now - BR.tAnal > 1400){
-    BR.tAnal = now;
-    brAnalizar(FM.cps * (FM.N / 4096));      // cuadros por segundo reales
-  }
-
-  const w = RW.w, h = RW.h;
-  cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
-  cx.strokeStyle = "rgba(36,48,64,.8)"; cx.lineWidth = 1;
-  for(let i=1;i<4;i++){ const y=h*i/4; cx.beginPath(); cx.moveTo(0,y); cx.lineTo(w,y); cx.stroke(); }
-
-  const nC = BR.curvaN || 0;
-  if(nC > 8){
-    let mx = 1e-6;
-    for(let i=0;i<nC;i++) mx = Math.max(mx, Math.abs(BR.curva[i]));
-    cx.strokeStyle = BR.listo ? "#E8A33D" : "#6FA8C7";
-    cx.lineWidth = Math.max(2, h/220);
-    cx.beginPath();
-    for(let i=0;i<nC;i++){
-      const x = i/(nC-1) * w;
-      const y = h/2 - (BR.curva[i]/mx) * (h*0.40);
-      i ? cx.lineTo(x,y) : cx.moveTo(x,y);
-    }
-    cx.stroke();
-    BR.ampMM = mx;
-  }
-
-  const listo = BR.listo;
-  const bE = $("b-bpm"), vE = $("b-verdict");
-  bE.textContent = listo ? BR.bpm.toFixed(0) : "—";
-  bE.classList.toggle("zero", !listo);
-  vE.classList.toggle("hit", listo);
-  const pct = Math.min(100, Math.round(BR.llenos / 256 * 100));
-  vE.textContent = BR.llenos < 256 ? "ACUMULANDO SEÑAL… " + pct + "%"
-    : listo ? "RESPIRACIÓN DETECTADA · CUERPO INMÓVIL CONFIRMADO"
-            : "SIN PATRÓN RESPIRATORIO ESTABLE";
-
-  $("b-conf").textContent = BR.conf ? (BR.conf*100).toFixed(0) + " %" : "—";
-  $("b-bar").style.right  = (100 - Math.min(100, BR.conf*260)) + "%";
-  $("b-dist").textContent = BR.binMejor >= 0
-    ? (BR.binMejor * FM.mmPerLag / 1000).toFixed(2).replace(".", ",") + " m" : "—";
-  $("b-amp").textContent  = BR.ampMM ? BR.ampMM.toFixed(2).replace(".", ",") + " mm" : "—";
-  $("b-fps").textContent  = (FM.cps * (FM.N/4096)).toFixed(1) + " Hz";
-  $("b-dot").className    = "dot " + (listo ? "live" : "");
-  $("b-state").textContent = BR.llenos < 256 ? "ACUMULANDO"
-                           : listo ? "SIGNO VITAL PRESENTE" : "BUSCANDO";
-}
-
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
-               solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
-               resp:$("v-resp"), gate:$("v-gate")};
+               solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -1569,7 +1301,6 @@ function goto(mode){
   location.hash = mode;
   const g = {
     consola : ["Habilitar sensor acústico","El equipo emite un tono de ~19 kHz y escucha su propio reflejo. No graba audio: mide la deformación del canal.","Iniciar relevamiento"],
-    resp    : ["Habilitar lectura de signos vitales","Emite un barrido que no vas a oír y mide en qué fase vuelve el eco. Sentate a un metro y quedate quieto: tarda unos 25 segundos en enganchar la respiración.","Iniciar lectura"],
     radar   : ["Habilitar radar de rango","Barrido FMCW de 17 a 22 kHz. El retardo del eco es tiempo de vuelo, y el tiempo de vuelo es distancia. Quedate quieto los primeros segundos: está aprendiendo las paredes.","Iniciar telemetría"],
     terminal: ["Habilitar sensor acústico","Tu teléfono va a emitir un tono que no vas a oír y escuchar cómo vuelve. Cuando te movés, vuelve distinto.","Relevarme"],
     velo    : ["Activar contramedida","El velo emite ruido de banda ancha en 17–22 kHz. Inutiliza cualquier relevamiento acústico del ambiente, incluido el nuestro.","Activar velo"],
@@ -1614,7 +1345,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi"];
 
 async function launch(){
   const mode = pending;
@@ -1634,20 +1365,8 @@ async function launch(){
   S.mode = mode; S.running = true; S.n = 0;
   S.forced = null; S.ghost = 0; S.peak = 0; S.lastHit = 0;
 
-  if(mode === "resp"){
-    show("resp");
-    RW.cv = $("bwf"); RW.cx = RW.cv.getContext("2d",{alpha:false}); rwSize();
-    fmStart(); brInit(); BR.activo = true; BR.tAnal = 0;
-    $("b-bins").textContent = BR.bins.length + " (cada " + (BR.DEC*FM.mmPerLag).toFixed(1) + " mm)";
-    $("b-win").textContent  = (BR.NF / FM.cps * (FM.N/4096)).toFixed(0) + " s";
-    $("b-lam").textContent  = (C_SOUND/((FM.F1+FM.F2)/2)*1000/4).toFixed(1) + " mm por radián";
-    $("bopbar").style.opacity = "1";
-    clearTimeout(opTimer);
-    opTimer = setTimeout(()=>{ $("bopbar").style.opacity = "0"; }, 12000);
-  }
-  else if(mode === "radar"){
+  if(mode === "radar"){
     show("radar");
-    BR.activo = false;
     rwInit($("rwf"));
     fmStart();
     $("r-sr").textContent  = (S.ctx.sampleRate/1000).toFixed(1) + " kHz";
@@ -1706,7 +1425,6 @@ function addBtn(host, label, fn){
 
 function stopAll(){
   S.running = false;
-  BR.activo = false;
   emitOff(); jamOff(); fmStop();
   if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream = null; S.analyser = null; }
   $("s-big").classList.remove("pulse");
@@ -1718,7 +1436,6 @@ function loop(){
   requestAnimationFrame(loop);
   const now = performance.now();
 
-  if(S.mode === "resp"){ brDibujar(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
@@ -1821,7 +1538,6 @@ document.addEventListener("click", e=>{
   if(a.dataset.act === "cal") calibrate();
   if(a.dataset.act === "clut"){ FM.learn = 0; FM.scan = 0; FM.ready = false; }
   if(a.dataset.act === "kcal"){ KS.base = null; KS.learn = 0; KS.peak = KS.uniq; }
-  if(a.dataset.act === "brcal"){ brInit(); BR.activo = true; }
   if(a.dataset.act === "jam"){
     S.jamming ? jamOff() : jamOn();
     a.classList.toggle("on", S.jamming);
@@ -1905,12 +1621,6 @@ $("r-gain").addEventListener("input", e=>{
 });
 
 document.addEventListener("keydown", e=>{
-  if(current === "resp"){
-    const r = e.key.toLowerCase();
-    if(r === "k"){ brInit(); BR.activo = true; }
-    if(r === "h"){ const o=$("bopbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
-    return;
-  }
   if(current === "csi"){
     const c = e.key.toLowerCase();
     if(c === "p") $("k-conn").click();
@@ -1941,7 +1651,6 @@ window.addEventListener("resize", ()=>{
   if(current === "consola") wfSize();
   if(current === "radar")   rwSize();
   if(current === "csi")     kSize();
-  if(current === "resp")    rwSize();
 });
 
 $("c-f0v").textContent = "19.00 kHz";
