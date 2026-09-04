@@ -310,6 +310,11 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
+          <button class="tile" data-go="lab" style="--tint:var(--amber-hot)">
+            <span class="n">MÓDULO 09 · LABORATORIO</span>
+            <span class="t">Ensayo guiado</span>
+            <span class="d">Te dice paso por paso qué hacer, marca la verdad de campo y guarda todo para analizarlo después.</span>
+          </button>
           <button class="tile" data-go="resp" style="--tint:var(--alert)">
             <span class="n">MÓDULO 08 · SIGNOS VITALES</span>
             <span class="t">Respiración</span>
@@ -395,6 +400,71 @@
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ LABORATORIO ============ -->
+    <section class="inst" id="v-lab" hidden>
+      <div class="scope" style="display:flex;flex-direction:column;justify-content:center;
+           align-items:center;text-align:center;padding:22px;gap:14px">
+        <div class="kicker" id="l-paso">PASO 0 DE 0</div>
+        <div id="l-inst" style="font-family:var(--mono);font-weight:700;
+             font-size:clamp(22px,4.4vw,44px);line-height:1.14;max-width:20ch;
+             text-wrap:balance;color:var(--ink)">Tocá EMPEZAR cuando estés listo</div>
+        <div id="l-sub" style="font-size:15px;line-height:1.5;color:var(--ink-dim);max-width:44ch"></div>
+        <div id="l-cuenta" style="font-family:var(--mono);font-weight:700;
+             font-size:clamp(46px,9vw,86px);line-height:1;color:var(--amber);
+             font-variant-numeric:tabular-nums">—</div>
+        <canvas id="lwf" style="width:min(100%,560px);height:74px;border:1px solid var(--line);
+             background:#06090C;flex:0 0 auto"></canvas>
+      </div>
+      <div class="readout">
+        <div class="count-block">
+          <div class="count-label">Muestras guardadas</div>
+          <div class="count zero" id="l-n">0</div>
+          <div class="verdict" id="l-estado">SIN GRABAR</div>
+        </div>
+        <dl class="rows">
+          <div class="row"><dt>Distancia detectada</dt><dd class="acc" id="l-dist">—</dd></div>
+          <div class="row"><dt>Respiraciones por minuto</dt><dd class="acc" id="l-bpm">—</dd></div>
+          <div class="row"><dt>Confianza</dt><dd class="cel" id="l-conf">—</dd></div>
+          <div class="row"><dt>Marcas manuales</dt><dd id="l-ev">0</dd></div>
+          <div class="row"><dt>Duración</dt><dd id="l-dur">0:00</dd></div>
+        </dl>
+        <div class="ctl">
+          <div class="btns">
+            <button class="b" id="l-go">Empezar ensayo</button>
+            <button class="b" id="l-skip">Siguiente paso</button>
+          </div>
+          <label>Marcar lo que está pasando ahora</label>
+          <div class="btns">
+            <button class="b" data-ev="quieto">Estoy quieto</button>
+            <button class="b" data-ev="moviendo">Me muevo</button>
+            <button class="b" data-ev="entro">Entré</button>
+            <button class="b" data-ev="sali">Salí</button>
+          </div>
+          <div class="btns">
+            <button class="b" data-ev="p0">0 personas</button>
+            <button class="b" data-ev="p1">1 persona</button>
+            <button class="b" data-ev="p2">2 personas</button>
+            <button class="b" data-ev="p3">3+</button>
+          </div>
+          <label>Respiraciones que contaste vos (por minuto)
+            <input type="text" id="l-real" inputmode="numeric" maxlength="3"
+                   placeholder="ej: 14" style="background:var(--panel-2);border:1px solid var(--line);
+                   color:var(--ink);font:400 14px/1 var(--mono);padding:10px">
+          </label>
+          <div class="btns">
+            <button class="b" id="l-nota">Anotar comentario</button>
+            <button class="b warn" id="l-save">Descargar sesión</button>
+          </div>
+        </div>
+      </div>
+      <div class="strip">
+        <span><span class="dot" id="l-dot"></span><b id="l-st">EN ESPERA</b></span>
+        <span>PROTOCOLO <b>VERDAD DE CAMPO</b></span>
+        <span>MUESTREO <b>5 Hz</b></span>
+        <span>SALIDA <b>JSON</b></span>
       </div>
     </section>
 
@@ -666,7 +736,7 @@ const S = {
   base:null, baseRef:null, calSamples:[], calibrating:false,
   n:0, running:false, mode:null,
   db:0, dir:0, peak:0, lastHit:0, forced:null, ghost:0,
-  ema:0, level:0, pend:0, pendN:0,
+  ema:0, level:0, pend:0, pendN:0, tCal:0,
   HOLD:4200,
   archive:false, archDrive:0, archPhase:0
 };
@@ -759,6 +829,7 @@ function calibrate(){
   S.calibrating = true; S.calSamples = [];
   S.base = null; S.baseRef = null;
   S.ema = 0; S.level = 0; S.pend = 0; S.pendN = 0; S.peak = 0;
+  S.tCal = 0;
 }
 
 /* Una medición: devuelve dB de energía lateral sobre el piso calibrado. */
@@ -1497,11 +1568,148 @@ function brDibujar(now){
                            : listo ? "SIGNO VITAL PRESENTE" : "BUSCANDO";
 }
 
+
+/* ══════════════ Laboratorio · verdad de campo ══════════════
+   Nada de lo que mide el sistema sirve si no se puede comparar contra lo que
+   realmente pasaba. Este modulo dice paso por paso que hacer, marca cada tramo
+   con su etiqueta, y guarda todo para analizarlo despues.                      */
+const LAB = {
+  pasos:[
+    {t:"Salí de la habitación",       s:"Cerrá la puerta si podés. Esto le enseña al equipo cómo suena el lugar vacío.", d:20, e:"vacio"},
+    {t:"Entrá y parate a 1 metro",    s:"Quedate parado, quieto, mirando la pantalla.", d:20, e:"parado_1m"},
+    {t:"Movete de un lado a otro",    s:"Despacio, como caminando por la habitación. Sin correr.", d:20, e:"caminando"},
+    {t:"Sentate a 1 metro y no te muevas", s:"Respirá normal. No hables. Este es el tramo importante: acá se mide la respiración.", d:70, e:"respirando_1m"},
+    {t:"Contá tus respiraciones",     s:"Contá durante 30 segundos y multiplicá por 2. Escribilo en el casillero de la derecha.", d:35, e:"conteo_manual"},
+    {t:"Alejate a 3 metros, quieto",  s:"Sentado o parado, pero sin moverte.", d:30, e:"respirando_3m"},
+    {t:"Volvé a salir",               s:"Último tramo de sala vacía, para comparar con el primero.", d:20, e:"vacio_final"}
+  ],
+  i:-1, tPaso:0, corriendo:false, t0:0,
+  muestras:[], eventos:[], tMuestra:0, tDib:0, traza:[]
+};
+
+function labIniciar(){
+  LAB.muestras = []; LAB.eventos = []; LAB.traza = [];
+  LAB.i = 0; LAB.corriendo = true; LAB.t0 = performance.now();
+  LAB.tPaso = performance.now();
+  brInit(); BR.activo = true;
+  labPintarPaso();
+  labEvento("inicio_ensayo");
+}
+
+function labPintarPaso(){
+  const p = LAB.pasos[LAB.i];
+  if(!p){
+    $("l-paso").textContent = "ENSAYO COMPLETO";
+    $("l-inst").textContent = "Listo. Descargá la sesión.";
+    $("l-sub").textContent  = "El archivo tiene todo lo que midió el equipo y todo lo que marcaste vos.";
+    $("l-cuenta").textContent = "✓";
+    LAB.corriendo = false;
+    labEvento("fin_ensayo");
+    return;
+  }
+  $("l-paso").textContent = "PASO " + (LAB.i+1) + " DE " + LAB.pasos.length;
+  $("l-inst").textContent = p.t;
+  $("l-sub").textContent  = p.s;
+  labEvento("paso:" + p.e);
+}
+
+function labEvento(tipo, nota){
+  LAB.eventos.push({
+    t: +( (performance.now() - LAB.t0)/1000 ).toFixed(2),
+    tipo: tipo,
+    nota: nota || null,
+    paso: LAB.i >= 0 && LAB.pasos[LAB.i] ? LAB.pasos[LAB.i].e : null
+  });
+  $("l-ev").textContent = LAB.eventos.length;
+}
+
+function labTick(now){
+  // muestreo a 5 Hz
+  if(now - LAB.tMuestra >= 200){
+    LAB.tMuestra = now;
+    const dist = FM.ready ? FM.dEma * FM.mmPerLag / 1000 : null;
+    LAB.muestras.push({
+      t:    +((now - LAB.t0)/1000).toFixed(2),
+      paso: LAB.i >= 0 && LAB.pasos[LAB.i] ? LAB.pasos[LAB.i].e : "libre",
+      dist: dist !== null ? +dist.toFixed(3) : null,
+      fuerza: +(FM.vEma*1000).toFixed(3),
+      hold: FM.hold > 0 ? 1 : 0,
+      bpm:  BR.listo ? +BR.bpm.toFixed(2) : null,
+      conf: +(BR.conf||0).toFixed(3),
+      binResp: BR.binMejor,
+      ampMM: BR.ampMM ? +BR.ampMM.toFixed(3) : null
+    });
+    LAB.traza.push(Math.min(1, (FM.vEma||0)*260));
+    if(LAB.traza.length > 190) LAB.traza.shift();
+    $("l-n").textContent = LAB.muestras.length;
+    $("l-n").classList.toggle("zero", LAB.muestras.length === 0);
+  }
+
+  // avance de paso
+  if(LAB.corriendo && LAB.pasos[LAB.i]){
+    const resta = LAB.pasos[LAB.i].d - (now - LAB.tPaso)/1000;
+    $("l-cuenta").textContent = Math.max(0, Math.ceil(resta));
+    if(resta <= 0){ LAB.i++; LAB.tPaso = now; labPintarPaso(); }
+  }
+
+  // lecturas
+  $("l-dist").textContent = (FM.ready && FM.hold > 0)
+    ? (FM.dEma*FM.mmPerLag/1000).toFixed(2).replace(".",",") + " m" : "—";
+  $("l-bpm").textContent  = BR.listo ? BR.bpm.toFixed(0) : "—";
+  $("l-conf").textContent = BR.conf ? (BR.conf*100).toFixed(0) + " %" : "—";
+  const seg = Math.floor((now - LAB.t0)/1000);
+  $("l-dur").textContent  = Math.floor(seg/60) + ":" + String(seg%60).padStart(2,"0");
+  $("l-estado").textContent = LAB.corriendo ? "GRABANDO" : (LAB.muestras.length ? "GRABACIÓN LISTA" : "SIN GRABAR");
+  $("l-dot").className = "dot " + (LAB.corriendo ? "hot" : LAB.muestras.length ? "live" : "");
+  $("l-st").textContent = LAB.corriendo ? "GRABANDO" : "EN ESPERA";
+
+  // traza
+  if(now - LAB.tDib > 60){
+    LAB.tDib = now;
+    const cv = $("lwf"), cx = cv.getContext("2d");
+    const r = cv.getBoundingClientRect();
+    if(cv.width !== Math.floor(r.width)) { cv.width = Math.floor(r.width); cv.height = 74; }
+    const w = cv.width, h = cv.height;
+    cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
+    cx.strokeStyle = "#E8A33D"; cx.lineWidth = 2; cx.beginPath();
+    LAB.traza.forEach((v,i)=>{
+      const x = i/Math.max(1,LAB.traza.length-1)*w, y = h - v*(h-6) - 3;
+      i ? cx.lineTo(x,y) : cx.moveTo(x,y);
+    });
+    cx.stroke();
+  }
+}
+
+function labDescargar(){
+  const real = ($("l-real").value || "").trim();
+  const datos = {
+    version: 2,
+    generado: new Date().toISOString(),
+    equipo: {
+      muestreoHz: FM.cps ? +(FM.cps*(FM.N/4096)).toFixed(2) : null,
+      barridoHz: [FM.F1, Math.round(FM.F2)],
+      mmPorBin: +FM.mmPerLag.toFixed(3),
+      alcanceM: +(FM.RNG*FM.mmPerLag/1000).toFixed(2),
+      binsRespiracion: BR.bins ? BR.bins.length : 0,
+      ventanaRespSeg: FM.cps ? +(BR.NF/(FM.cps*(FM.N/4096))).toFixed(1) : null
+    },
+    respiracionesContadasPorPersona: real ? +real : null,
+    eventos: LAB.eventos,
+    muestras: LAB.muestras
+  };
+  const blob = new Blob([JSON.stringify(datos, null, 1)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "censo_ensayo_" + new Date().toISOString().slice(0,19).replace(/[:T]/g,"-") + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
                solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
-               resp:$("v-resp"), gate:$("v-gate")};
+               resp:$("v-resp"), lab:$("v-lab"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -1568,7 +1776,8 @@ function goto(mode){
   pending = mode;
   location.hash = mode;
   const g = {
-    consola : ["Habilitar sensor acústico","El equipo emite un tono de ~19 kHz y escucha su propio reflejo. No graba audio: mide la deformación del canal.","Iniciar relevamiento"],
+    consola : ["Habilitar sensor acústico","IMPORTANTE: al arrancar aprende cómo suena la sala. Quedate quieto los primeros 3 segundos — si te movés durante la calibración, el equipo te toma como parte del fondo y después no te ve. Después movete para probar.","Iniciar relevamiento"],
+    lab     : ["Habilitar el laboratorio","Te va a ir diciendo paso por paso qué hacer. Dura unos 4 minutos y al final te da un archivo con todo lo que midió y todo lo que marcaste vos.","Entrar al laboratorio"],
     resp    : ["Habilitar lectura de signos vitales","Emite un barrido que no vas a oír y mide en qué fase vuelve el eco. Sentate a un metro y quedate quieto: tarda unos 25 segundos en enganchar la respiración.","Iniciar lectura"],
     radar   : ["Habilitar radar de rango","Barrido FMCW de 17 a 22 kHz. El retardo del eco es tiempo de vuelo, y el tiempo de vuelo es distancia. Quedate quieto los primeros segundos: está aprendiendo las paredes.","Iniciar telemetría"],
     terminal: ["Habilitar sensor acústico","Tu teléfono va a emitir un tono que no vas a oír y escuchar cómo vuelve. Cuando te movés, vuelve distinto.","Relevarme"],
@@ -1614,7 +1823,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab"];
 
 async function launch(){
   const mode = pending;
@@ -1634,7 +1843,17 @@ async function launch(){
   S.mode = mode; S.running = true; S.n = 0;
   S.forced = null; S.ghost = 0; S.peak = 0; S.lastHit = 0;
 
-  if(mode === "resp"){
+  if(mode === "lab"){
+    show("lab");
+    fmStart(); brInit(); BR.activo = true;
+    LAB.i = -1; LAB.corriendo = false; LAB.t0 = performance.now();
+    LAB.muestras = []; LAB.eventos = []; LAB.traza = [];
+    $("l-paso").textContent = "PROTOCOLO DE 7 PASOS · ~4 MINUTOS";
+    $("l-inst").textContent = "Tocá EMPEZAR cuando estés listo";
+    $("l-sub").textContent  = "Apagá ventilador, aire y música. Eso es lo único que arruina la medición.";
+    $("l-cuenta").textContent = "—";
+  }
+  else if(mode === "resp"){
     show("resp");
     RW.cv = $("bwf"); RW.cx = RW.cv.getContext("2d",{alpha:false}); rwSize();
     fmStart(); brInit(); BR.activo = true; BR.tAnal = 0;
@@ -1718,6 +1937,7 @@ function loop(){
   requestAnimationFrame(loop);
   const now = performance.now();
 
+  if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
@@ -1758,7 +1978,10 @@ function loop(){
     cE.textContent = n;
     cE.classList.toggle("zero", n === 0);
     vE.classList.toggle("hit", n > 0);
-    vE.textContent = m.cal ? "CALIBRANDO PISO DE RUIDO…"
+    if(m.cal){ S.tCal = now; }
+    const reciente = now - S.tCal < 9000;
+    vE.textContent = m.cal ? "NO TE MUEVAS · APRENDIENDO CÓMO SUENA LA SALA"
+      : reciente && n === 0 ? "LISTO · AHORA MOVETE PARA PROBAR"
       : n === 0 ? "DOMICILIO SIN OCUPACIÓN REGISTRADA"
       : n === 1 ? "OCUPACIÓN CONFIRMADA — 1 CUERPO"
       : "OCUPACIÓN CONFIRMADA — " + n + " CUERPOS";
@@ -1870,6 +2093,21 @@ $("c-gain").addEventListener("input", e=>{
 $("c-thr").addEventListener("input", e=>{
   S.thr = +e.target.value;
   $("c-thv").textContent = S.thr.toFixed(1)+" dB";
+});
+
+$("l-go").addEventListener("click", labIniciar);
+$("l-skip").addEventListener("click", ()=>{
+  if(LAB.i < 0){ labIniciar(); return; }
+  LAB.i++; LAB.tPaso = performance.now(); labPintarPaso();
+});
+$("l-save").addEventListener("click", labDescargar);
+$("l-nota").addEventListener("click", ()=>{
+  const t = prompt("¿Qué está pasando? (queda guardado con la marca de tiempo)");
+  if(t) labEvento("nota", t);
+});
+document.addEventListener("click", e=>{
+  const b = e.target.closest("[data-ev]");
+  if(b) labEvento(b.dataset.ev);
 });
 
 $("ct-go").addEventListener("click", certIssue);
