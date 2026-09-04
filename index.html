@@ -425,7 +425,10 @@
           <div class="verdict" id="l-estado">SIN GRABAR</div>
         </div>
         <dl class="rows">
-          <div class="row"><dt>Distancia detectada</dt><dd class="acc" id="l-dist">—</dd></div>
+          <div class="row"><dt>Distancia por SONIDO</dt><dd class="acc" id="l-dist">—</dd></div>
+          <div class="row"><dt>Distancia por CÁMARA</dt><dd class="cel" id="l-cam">—</dd></div>
+          <div class="row"><dt>Diferencia</dt><dd id="l-dif">—</dd></div>
+          <div class="row"><dt>Persona en cuadro</dt><dd id="l-vis">—</dd></div>
           <div class="row"><dt>Respiraciones por minuto</dt><dd class="acc" id="l-bpm">—</dd></div>
           <div class="row"><dt>Confianza</dt><dd class="cel" id="l-conf">—</dd></div>
           <div class="row"><dt>Marcas manuales</dt><dd id="l-ev">0</dd></div>
@@ -435,6 +438,16 @@
           <div class="btns">
             <button class="b" id="l-go">Empezar ensayo</button>
             <button class="b" id="l-skip">Siguiente paso</button>
+          </div>
+          <label>Verdad de campo por cámara <span style="color:var(--ink-faint);text-transform:none;letter-spacing:0">— opcional, muy recomendado</span></label>
+          <div class="btns">
+            <button class="b" id="c2-on">Encender cámara</button>
+            <button class="b" id="c2-cal">Calibrar a 1 m</button>
+          </div>
+          <div class="hint" id="c2-est" style="width:auto">
+            La cámara detecta tu cuerpo y estima a qué distancia estás de verdad. Queda
+            grabado al lado de la medición por sonido, para poder compararlas.
+            El video no se guarda ni sale de tu máquina: solo se anota la distancia.
           </div>
           <label>Marcar lo que está pasando ahora</label>
           <div class="btns">
@@ -713,6 +726,7 @@
   </footer>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 <script>
 "use strict";
 
@@ -924,6 +938,7 @@ const FM = {
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
+  cfar:0, histBin:[], firme:false,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
 };
@@ -1045,19 +1060,49 @@ function fmProcess(){
 
   const a = FM.learn < 90 ? 0.12 : 0.012;   // aprende rápido, después se aquieta
   FM.learn++;
-  let pv=0, pk=0, tg=0, prev=0, rising=false;
-  const thr = best * (0.004 + 0.020/FM.sens);
 
   for(let k=0;k<FM.RNG;k++){
     const p = prof[bi + k] || 0;
     FM.clut[k] += (p - FM.clut[k]) * a;
-    const m = Math.max(0, p - FM.clut[k]);
-    FM.mov[k] = m;
-    if(m > pv){ pv = m; pk = k; }
-    if(m > thr && m > prev) rising = true;
-    else if(rising && m < prev){ tg++; rising = false; }
-    prev = m;
+    FM.mov[k] = Math.max(0, p - FM.clut[k]);
   }
+
+  /* CFAR de promediado de celdas.
+     Antes comparaba el máximo del perfil contra el promedio de TODO el perfil.
+     Para puro ruido, ese cociente vale naturalmente entre 6 y 20 sobre 560
+     celdas — por eso "detectaba" el 100% del tiempo, también con la sala vacía.
+     Lo correcto es comparar cada celda contra SUS VECINAS, dejando celdas de
+     guarda para que el propio blanco no contamine su propio umbral.            */
+  const GUA = 5, ENT = 20;
+  let pv = 0, pk = -1, mejorRel = 0, tg = 0;
+  for(let k=0;k<FM.RNG;k++){
+    let sum = 0, cnt = 0;
+    for(let j=k-GUA-ENT; j<=k+GUA+ENT; j++){
+      if(j < 0 || j >= FM.RNG || Math.abs(j-k) <= GUA) continue;
+      sum += FM.mov[j]; cnt++;
+    }
+    const ruidoLocal = sum / Math.max(cnt,1);
+    const rel = FM.mov[k] / Math.max(ruidoLocal, 1e-9);
+    const umbral = 3.0 + 26/FM.sens;          // factor CFAR, atado a sensibilidad
+    if(rel > umbral){
+      tg++;
+      if(rel > mejorRel){ mejorRel = rel; pv = FM.mov[k]; pk = k; }
+    }
+  }
+  FM.cfar = mejorRel;
+
+  /* Consistencia temporal: un cuerpo no se teletransporta. Se exige que el
+     blanco caiga cerca del mismo lugar en la mayoría de los últimos cuadros. */
+  FM.histBin.push(pk);
+  if(FM.histBin.length > 10) FM.histBin.shift();
+  const validos = FM.histBin.filter(v => v >= 0);
+  let firme = false;
+  if(pk >= 0 && validos.length >= 6){
+    const cerca = validos.filter(v => Math.abs(v - pk) <= 6).length;
+    firme = cerca >= 6;
+  }
+  FM.firme = firme;
+  if(!firme){ pk = FM.peakK; pv = 0; }
   FM.best = best; FM.pvRaw = pv;
   FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
 
@@ -1083,7 +1128,7 @@ function fmProcess(){
      numero se vuelve ilegible. Se suaviza la posicion, se suaviza la fuerza,
      y ademas el valor mostrado solo se refresca 3 veces por segundo: un numero
      que cambia 14 veces por segundo no se puede leer aunque sea correcto.     */
-  const fuerte = pv > FM.piso * 2.2 && FM.piso > 0;
+  const fuerte = FM.firme;
   if(fuerte){
     if(FM.hold <= 0) FM.dEma = pk;                 // primer enganche: salto directo
     else             FM.dEma += (pk - FM.dEma) * 0.14;
@@ -1110,7 +1155,7 @@ const BR = {
   NF:512,                        // muestras de historia por bin (~44 s)
   bins:[], hist:null, ph:null, prevPh:null, w:0, llenos:0,
   re:null, im:null, ven:null,
-  bpm:0, conf:0, binMejor:-1, curva:null, tAnal:0, activo:false, listo:false
+  bpm:0, conf:0, prom:0, tmp:null, binMejor:-1, curva:null, tAnal:0, activo:false, listo:false
 };
 
 function brInit(){
@@ -1177,26 +1222,31 @@ function brAnalizar(fps){
   if(usar < 256 || fps < 4) return;
 
   const df   = fps / N;
-  const kLo  = Math.max(2, Math.round(0.10 / df));   // 6 por minuto
+  const kLo  = Math.max(3, Math.round(0.10 / df));        // el pasaaltos ya mata lo de abajo
   const kHi  = Math.min(N/2 - 2, Math.round(0.60 / df));  // 36 por minuto
-  let mejor = -1, mejorPot = 0, mejorK = 0, mejorTot = 1e-9;
+  let mejor = -1, mejorPro = 0, mejorK = 0, mejorTot = 1e-9;
+
+  /* La fase deriva sola (temperatura, deriva del reloj, micro-movimiento del
+     mueble). Esa deriva es enorme y lentísima, y con solo quitar la tendencia
+     lineal seguía dominando: por eso el resultado se clavaba en el bin más bajo
+     permitido y reportaba siempre 5-6 por minuto, hasta con la sala vacía.
+     Se quita con una media móvil de ~9 s, que es un pasaaltos de verdad.        */
+  const VM = Math.max(8, Math.round(fps * 9));
+
+  const banda = new Float64Array(kHi - kLo + 1);
 
   for(let b=0;b<B;b++){
     const off = b*N;
-    // ventana ordenada en el tiempo + quitar media y tendencia lineal
-    let sx=0, sy=0, sxy=0, sxx=0;
-    for(let i=0;i<usar;i++){
-      const v = BR.hist[off + ((BR.w - usar + i + N) % N)];
-      sx += i; sy += v; sxy += i*v; sxx += i*i;
-    }
-    const den = usar*sxx - sx*sx;
-    const m = den !== 0 ? (usar*sxy - sx*sy)/den : 0;
-    const c = (sy - m*sx)/usar;
+    const cru = BR.tmp || (BR.tmp = new Float32Array(N));
+    for(let i=0;i<usar;i++) cru[i] = BR.hist[off + ((BR.w - usar + i + N) % N)];
 
+    // pasaaltos: restar la media móvil de VM muestras
     for(let i=0;i<N;i++){
       if(i < usar){
-        const v = BR.hist[off + ((BR.w - usar + i + N) % N)] - (m*i + c);
-        BR.re[i] = v * BR.ven[i];
+        let a0 = Math.max(0, i - (VM>>1)), a1 = Math.min(usar-1, i + (VM>>1));
+        let sm = 0;
+        for(let j=a0;j<=a1;j++) sm += cru[j];
+        BR.re[i] = (cru[i] - sm/(a1-a0+1)) * BR.ven[i];
       } else BR.re[i] = 0;
       BR.im[i] = 0;
     }
@@ -1205,13 +1255,19 @@ function brAnalizar(fps){
     let pot=0, kp=0, tot=1e-12;
     for(let k=kLo;k<=kHi;k++){
       const p = BR.re[k]*BR.re[k] + BR.im[k]*BR.im[k];
-      tot += p;
+      banda[k-kLo] = p; tot += p;
       if(p > pot){ pot = p; kp = k; }
     }
-    if(pot > mejorPot){ mejorPot = pot; mejor = b; mejorK = kp; mejorTot = tot; }
+    // El pico tiene que sobresalir de su propia banda, no solo ser el mayor.
+    const orden = Array.prototype.slice.call(banda).sort((x,y)=>x-y);
+    const medBanda = orden[orden.length>>1] || 1e-12;
+    const prominencia = pot / medBanda;
+    // y no puede estar pegado al borde: eso es deriva, no respiración
+    if(kp <= kLo + 1 || kp >= kHi - 1) continue;   // pegado al borde = deriva, no respiración
+    if(prominencia > mejorPro){ mejorPro = prominencia; mejorPot = pot; mejor = b; mejorK = kp; mejorTot = tot; }
   }
 
-  if(mejor < 0){ BR.listo = false; return; }
+  if(mejor < 0 || mejorPro < 6){ BR.listo = false; BR.conf = 0; return; }
 
   // interpolacion parabolica: afina el pico mas alla de la grilla de la FFT
   const off = mejor*N;
@@ -1226,9 +1282,10 @@ function brAnalizar(fps){
   const kFino = mejorK + Math.max(-1, Math.min(1, dd));
 
   BR.bpm  = kFino * df * 60;
-  BR.conf = mejorPot / mejorTot;              // que tan dominante es ese pico
+  BR.prom = mejorPro;
+  BR.conf = Math.min(1, mejorPro / 30);       // cuánto sobresale del ruido de su banda
   BR.binMejor = BR.bins[mejor];
-  BR.listo = BR.conf > 0.18 && BR.bpm > 5 && BR.bpm < 40;
+  BR.listo = mejorPro >= 6 && BR.bpm > 7.5 && BR.bpm < 38;
 
   // curva para dibujar
   let sy2=0;
@@ -1593,6 +1650,91 @@ function brDibujar(now){
 }
 
 
+/* ══════════════ Cámara · verdad de campo automática ══════════════
+   Idea del Creador, y es la que destraba todo: hasta ahora ajustábamos a ciegas.
+   La cámara detecta el cuerpo y estima la distancia real, y eso queda grabado al
+   lado de la medición acústica con la misma marca de tiempo. Recién ahí se puede
+   preguntar algo que antes era imposible: ¿el sonido acierta, sí o no?
+
+   La distancia sale del ancho de hombros en píxeles. El ancho real de una persona
+   es casi constante (~40 cm), así que:   distancia = k / anchoEnPixeles
+   La constante k se fija una vez, parándose a 1 metro y tocando calibrar.        */
+const CAM = {
+  activa:false, listo:false, pose:null, video:null, cv:null, cx:null,
+  hayPersona:false, anchoPx:0, distM:null, k:null, conf:0,
+  movim:0, ultX:null, ultY:null, cuadros:0, err:null
+};
+
+async function camIniciar(){
+  if(CAM.activa) return;
+  if(typeof Pose === "undefined"){
+    CAM.err = "No se pudo cargar el detector de cuerpo (sin internet o CDN bloqueado).";
+    $("c2-est").textContent = CAM.err; return;
+  }
+  try{
+    CAM.video = document.createElement("video");
+    CAM.video.autoplay = true; CAM.video.playsInline = true; CAM.video.muted = true;
+    CAM.video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video:{ width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:15} }, audio:false
+    });
+    await CAM.video.play();
+  }catch(e){
+    CAM.err = "Cámara denegada: " + (e && e.name ? e.name : e);
+    $("c2-est").textContent = CAM.err; return;
+  }
+
+  CAM.pose = new Pose({ locateFile: f =>
+    "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/" + f });
+  CAM.pose.setOptions({ modelComplexity:0, smoothLandmarks:true,
+                        minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+  CAM.pose.onResults(camResultado);
+  CAM.activa = true; CAM.listo = true;
+  $("c2-est").textContent = "Cámara activa. Parate a 1 metro y tocá CALIBRAR.";
+  camBucle();
+}
+
+async function camBucle(){
+  if(!CAM.activa) return;
+  try{ if(CAM.video.readyState >= 2) await CAM.pose.send({image: CAM.video}); }catch(e){}
+  setTimeout(camBucle, 90);                       // ~11 Hz, alcanza y sobra
+}
+
+function camResultado(res){
+  CAM.cuadros++;
+  const L = res.poseLandmarks;
+  if(!L || !L[11] || !L[12]){ CAM.hayPersona = false; CAM.distM = null; CAM.conf = 0; return; }
+  const vi = Math.min(L[11].visibility ?? 0, L[12].visibility ?? 0);
+  CAM.conf = vi;
+  if(vi < 0.5){ CAM.hayPersona = false; CAM.distM = null; return; }
+
+  CAM.hayPersona = true;
+  const w = CAM.video.videoWidth || 640, h = CAM.video.videoHeight || 480;
+  const dx = (L[11].x - L[12].x) * w, dy = (L[11].y - L[12].y) * h;
+  CAM.anchoPx = Math.hypot(dx, dy);
+  CAM.distM = CAM.k ? +(CAM.k / Math.max(CAM.anchoPx, 1)).toFixed(3) : null;
+
+  const cx0 = (L[11].x + L[12].x)/2, cy0 = (L[11].y + L[12].y)/2;
+  if(CAM.ultX !== null){
+    const d = Math.hypot(cx0 - CAM.ultX, cy0 - CAM.ultY);
+    CAM.movim = CAM.movim*0.8 + d*0.2;
+  }
+  CAM.ultX = cx0; CAM.ultY = cy0;
+}
+
+function camCalibrar(){
+  if(!CAM.hayPersona || !CAM.anchoPx){
+    $("c2-est").textContent = "No te veo. Poné el cuerpo completo en cuadro."; return;
+  }
+  CAM.k = CAM.anchoPx * 1.0;                      // referencia: 1 metro
+  $("c2-est").textContent = "Calibrado a 1 m. Ya mide distancia real.";
+}
+
+function camParar(){
+  CAM.activa = false;
+  try{ CAM.video?.srcObject?.getTracks().forEach(t=>t.stop()); }catch(e){}
+  CAM.listo = false; CAM.hayPersona = false; CAM.distM = null;
+}
+
 /* ══════════════ Laboratorio · verdad de campo ══════════════
    Nada de lo que mide el sistema sirve si no se puede comparar contra lo que
    realmente pasaba. Este modulo dice paso por paso que hacer, marca cada tramo
@@ -1664,10 +1806,18 @@ function labTick(now){
       t:    +((now - LAB.t0)/1000).toFixed(2),
       paso: LAB.i >= 0 && LAB.pasos[LAB.i] ? LAB.pasos[LAB.i].e : "libre",
       dist: dist !== null ? +dist.toFixed(3) : null,
+      camDist: CAM.distM,
+      camPersona: CAM.hayPersona ? 1 : 0,
+      camAnchoPx: CAM.anchoPx ? +CAM.anchoPx.toFixed(1) : null,
+      camMovim: +(CAM.movim||0).toFixed(4),
+      camConf: +(CAM.conf||0).toFixed(2),
       fuerza: +(FM.vEma*1000).toFixed(3),
       pv: +(FM.pvRaw||0).toFixed(2),
       piso: +(FM.piso||0).toFixed(2),
       snr: FM.piso > 0 ? +(FM.pvRaw/FM.piso).toFixed(2) : null,
+      cfar: +(FM.cfar||0).toFixed(2),
+      firme: FM.firme ? 1 : 0,
+      prom: +(BR.prom||0).toFixed(1),
       directo: +(FM.best||0).toFixed(1),
       l0: FM.l0,
       glitch: FM.glitch,
@@ -1694,6 +1844,12 @@ function labTick(now){
   $("l-dist").textContent = (FM.ready && FM.hold > 0)
     ? (FM.dEma*FM.mmPerLag/1000).toFixed(2).replace(".",",") + " m" : "—";
   $("l-bpm").textContent  = BR.listo ? BR.bpm.toFixed(0) : "—";
+  const dS = (FM.ready && FM.hold > 0) ? FM.dEma*FM.mmPerLag/1000 : null;
+  $("l-cam").textContent = CAM.distM != null ? CAM.distM.toFixed(2).replace(".",",") + " m"
+                          : CAM.activa ? (CAM.hayPersona ? "sin calibrar" : "no te veo") : "—";
+  $("l-dif").textContent = (dS != null && CAM.distM != null)
+                          ? Math.abs(dS - CAM.distM).toFixed(2).replace(".",",") + " m" : "—";
+  $("l-vis").textContent = CAM.activa ? (CAM.hayPersona ? "SÍ" : "NO") : "cámara apagada";
   $("l-conf").textContent = BR.conf ? (BR.conf*100).toFixed(0) + " %" : "—";
   const seg = Math.floor((now - LAB.t0)/1000);
   $("l-dur").textContent  = Math.floor(seg/60) + ":" + String(seg%60).padStart(2,"0");
@@ -1733,6 +1889,7 @@ function labDescargar(){
       ventanaRespSeg: FM.cps ? +(BR.NF/(FM.cps*(FM.N/4096))).toFixed(1) : null
     },
     respiracionesContadasPorPersona: real ? +real : null,
+    camara: { usada: CAM.listo, calibrada: CAM.k != null, cuadros: CAM.cuadros },
     eventos: LAB.eventos,
     muestras: LAB.muestras
   };
@@ -1987,7 +2144,7 @@ function loop(){
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
-    const on = FM.ready && FM.hold > 0 && FM.pvRaw > FM.piso * (2.2 + 18/FM.sens);
+    const on = FM.ready && FM.hold > 0 && FM.firme;
     // El numero en pantalla se refresca 3 veces por segundo, no 14.
     if(on && now - FM.tShow > 320){ FM.shown = FM.dEma * FM.mmPerLag / 1000; FM.tShow = now; }
     if(!on) FM.shown = 0;
@@ -2140,6 +2297,12 @@ $("c-thr").addEventListener("input", e=>{
   $("c-thv").textContent = S.thr.toFixed(1)+" dB";
 });
 
+$("c2-on").addEventListener("click", ()=>{
+  if(CAM.activa){ camParar(); $("c2-on").textContent = "Encender cámara";
+                  $("c2-est").textContent = "Cámara apagada."; }
+  else { $("c2-on").textContent = "Apagar cámara"; camIniciar(); }
+});
+$("c2-cal").addEventListener("click", camCalibrar);
 $("l-go").addEventListener("click", labIniciar);
 $("l-skip").addEventListener("click", ()=>{
   if(LAB.i < 0){ labIniciar(); return; }
