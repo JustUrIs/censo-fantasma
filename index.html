@@ -436,7 +436,8 @@
         </dl>
         <div class="ctl">
           <div class="btns">
-            <button class="b" id="l-go">Empezar ensayo</button>
+            <button class="b" id="l-go">Completo (4 min)</button>
+            <button class="b" id="l-go2">Sentado (2:40)</button>
             <button class="b" id="l-skip">Siguiente paso</button>
           </div>
           <label>Verdad de campo por cámara <span style="color:var(--ink-faint);text-transform:none;letter-spacing:0">— opcional, muy recomendado</span></label>
@@ -1740,6 +1741,14 @@ function camParar(){
    realmente pasaba. Este modulo dice paso por paso que hacer, marca cada tramo
    con su etiqueta, y guarda todo para analizarlo despues.                      */
 const LAB = {
+  // Protocolo corto: se hace sentado, sin levantarse ni salir de la sala.
+  // Sirve donde no se puede hacer el completo (oficina, biblioteca, gente cerca).
+  sentado:[
+    {t:"Quieto y respirá normal", s:"No hables. No te muevas. Manos quietas. Este tramo mide la respiración.", d:70, e:"sentado_quieto"},
+    {t:"Contá tus respiraciones",  s:"Seguí quieto. Contá 30 segundos y multiplicá por 2. Anotalo en el casillero.", d:35, e:"sentado_conteo"},
+    {t:"Inclinate adelante y atrás", s:"Despacio, como meciéndote. Sin levantarte de la silla.", d:25, e:"sentado_moviendo"},
+    {t:"Quieto otra vez",          s:"Volvé a quedarte inmóvil. Sirve para comparar contra el tramo de movimiento.", d:40, e:"sentado_quieto2"}
+  ],
   pasos:[
     {t:"Salí de la habitación",       s:"Cerrá la puerta si podés. Esto le enseña al equipo cómo suena el lugar vacío.", d:20, e:"vacio"},
     {t:"Entrá y parate a 1 metro",    s:"Quedate parado, quieto, mirando la pantalla.", d:20, e:"parado_1m"},
@@ -1749,17 +1758,20 @@ const LAB = {
     {t:"Alejate a 3 metros, quieto",  s:"Sentado o parado, pero sin moverte.", d:30, e:"respirando_3m"},
     {t:"Volvé a salir",               s:"Último tramo de sala vacía, para comparar con el primero.", d:20, e:"vacio_final"}
   ],
-  i:-1, tPaso:0, corriendo:false, t0:0,
+  i:-1, tPaso:0, corriendo:false, t0:0, modo:"completo", completo:null,
   muestras:[], eventos:[], tMuestra:0, tDib:0, traza:[]
 };
 
-function labIniciar(){
+function labIniciar(sentado){
+  if(!LAB.completo) LAB.completo = LAB.pasos;
+  LAB.pasos = sentado ? LAB.sentado : LAB.completo;
+  LAB.modo  = sentado ? "sentado" : "completo";
   LAB.muestras = []; LAB.eventos = []; LAB.traza = [];
   LAB.i = 0; LAB.corriendo = true; LAB.t0 = performance.now();
   LAB.tPaso = performance.now();
   brInit(); BR.activo = true;
   labPintarPaso();
-  labEvento("inicio_ensayo");
+  labEvento("inicio_ensayo:" + LAB.modo);
 }
 
 function labPintarPaso(){
@@ -1888,6 +1900,7 @@ function labDescargar(){
       glitchesTotales: FM.glitch,
       ventanaRespSeg: FM.cps ? +(BR.NF/(FM.cps*(FM.N/4096))).toFixed(1) : null
     },
+    protocolo: LAB.modo,
     respiracionesContadasPorPersona: real ? +real : null,
     camara: { usada: CAM.listo, calibrada: CAM.k != null, cuadros: CAM.cuadros },
     eventos: LAB.eventos,
@@ -2046,7 +2059,7 @@ async function launch(){
     LAB.muestras = []; LAB.eventos = []; LAB.traza = [];
     $("l-paso").textContent = "PROTOCOLO DE 7 PASOS · ~4 MINUTOS";
     $("l-inst").textContent = "Tocá EMPEZAR cuando estés listo";
-    $("l-sub").textContent  = "Apagá ventilador, aire y música. Eso es lo único que arruina la medición.";
+    $("l-sub").textContent  = "Si hay gente alrededor o no podés salir de la sala, usá el protocolo SENTADO.";
     $("l-cuenta").textContent = "—";
   }
   else if(mode === "resp"){
@@ -2303,7 +2316,8 @@ $("c2-on").addEventListener("click", ()=>{
   else { $("c2-on").textContent = "Apagar cámara"; camIniciar(); }
 });
 $("c2-cal").addEventListener("click", camCalibrar);
-$("l-go").addEventListener("click", labIniciar);
+$("l-go").addEventListener("click", ()=>labIniciar(false));
+$("l-go2").addEventListener("click", ()=>labIniciar(true));
 $("l-skip").addEventListener("click", ()=>{
   if(LAB.i < 0){ labIniciar(); return; }
   LAB.i++; LAB.tPaso = performance.now(); labPintarPaso();
