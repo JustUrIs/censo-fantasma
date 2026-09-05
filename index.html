@@ -939,7 +939,7 @@ const FM = {
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
-  node:null, cola:[], workletCargado:false, modoCaptura:"-", procesados:0,
+  node:null, cola:[], workletCargado:false, modoCaptura:"-", procesados:0, rms:0,
   cfar:0, histBin:[], firme:false,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
@@ -1002,9 +1002,11 @@ function fmTxBuffer(ctx){
 const WORKLET_SRC = `
 class Captura extends AudioWorkletProcessor {
   constructor(){ super(); this.buf = new Float32Array(4096); this.w = 0; }
-  process(inputs){
+  process(inputs, outputs){
     const ch = inputs[0] && inputs[0][0];
-    if(!ch) return true;
+    const out = outputs[0] && outputs[0][0];
+    if(out) out.fill(0);              // salida muda, pero EXISTE: el grafo tira del nodo
+    if(!ch || ch.length === 0) return true;
     for(let i=0;i<ch.length;i++){
       this.buf[this.w++] = ch[i];
       if(this.w === 4096){
@@ -1039,12 +1041,18 @@ async function fmStart(){
       URL.revokeObjectURL(url);
       FM.workletCargado = true;
     }
-    FM.node = new AudioWorkletNode(ctx, "captura", {numberOfInputs:1, numberOfOutputs:0});
+    FM.node = new AudioWorkletNode(ctx, "captura",
+      {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
     FM.node.port.onmessage = ev => {
-      FM.cola.push(ev.data);
+      const b = ev.data;
+      let sq = 0;
+      for(let i=0;i<b.length;i+=8) sq += b[i]*b[i];
+      FM.rms = Math.sqrt(sq / (b.length/8));
+      FM.cola.push(b);
       if(FM.cola.length > 24){ FM.cola.shift(); FM.glitch++; }   // atraso extremo
     };
-    src.connect(FM.node);
+    FM.mute = ctx.createGain(); FM.mute.gain.value = 0;
+    src.connect(FM.node).connect(FM.mute).connect(ctx.destination);
     FM.modoCaptura = "worklet";
   }catch(e){
     // Respaldo para navegadores sin AudioWorklet.
@@ -1074,6 +1082,9 @@ function fmCapturar(ev){
   if(!FM.buf) return;
   FM.buf.copyWithin(0, 4096);          // desliza; 4096 es multiplo exacto del barrido
   FM.buf.set(x, 4096);
+  let sq = 0;
+  for(let i=0;i<x.length;i+=8) sq += x[i]*x[i];
+  FM.rms = Math.sqrt(sq / (x.length/8));
   if(FM.fresco) FM.glitch++;           // no llegamos a procesar el bloque anterior
   FM.fresco = true;
 }
@@ -1710,7 +1721,7 @@ function brDibujar(now){
    La constante k se fija una vez, parándose a 1 metro y tocando calibrar.        */
 const CAM = {
   activa:false, listo:false, pose:null, video:null, cv:null, cx:null,
-  hayPersona:false, anchoPx:0, distM:null, k:null, conf:0,
+  hayPersona:false, anchoPx:0, distM:null, k:null, conf:0, med:null,
   movim:0, ultX:null, ultY:null, cuadros:0, err:null
 };
 
@@ -1761,6 +1772,19 @@ function camResultado(res){
   const dx = (L[11].x - L[12].x) * w, dy = (L[11].y - L[12].y) * h;
   CAM.anchoPx = Math.hypot(dx, dy);
   CAM.distM = CAM.k ? +(CAM.k / Math.max(CAM.anchoPx, 1)).toFixed(3) : null;
+
+  /* El ancho de hombros se acorta si girás el torso o te inclinás: por eso te
+     daba "más lejos" cuando en realidad te acercabas. Se registran varias medidas
+     crudas para poder elegir después, con datos, cuál es la más estable.
+     La vertical ojos->hombros no cambia al girar sobre el eje vertical.          */
+  const dpx = (a,b) => Math.hypot((L[a].x-L[b].x)*w, (L[a].y-L[b].y)*h);
+  CAM.med = {
+    hombros: +CAM.anchoPx.toFixed(1),
+    ojos:    L[2] && L[5] ? +dpx(2,5).toFixed(1) : null,
+    orejas:  L[7] && L[8] ? +dpx(7,8).toFixed(1) : null,
+    caderas: L[23] && L[24] ? +dpx(23,24).toFixed(1) : null,
+    vertical: L[0] ? +Math.abs(((L[11].y+L[12].y)/2 - L[0].y)*h).toFixed(1) : null
+  };
 
   const cx0 = (L[11].x + L[12].x)/2, cy0 = (L[11].y + L[12].y)/2;
   if(CAM.ultX !== null){
@@ -1869,6 +1893,7 @@ function labTick(now){
       camDist: CAM.distM,
       camPersona: CAM.hayPersona ? 1 : 0,
       camAnchoPx: CAM.anchoPx ? +CAM.anchoPx.toFixed(1) : null,
+      camMed: CAM.med,
       camMovim: +(CAM.movim||0).toFixed(4),
       camConf: +(CAM.conf||0).toFixed(2),
       fuerza: +(FM.vEma*1000).toFixed(3),
@@ -1879,6 +1904,7 @@ function labTick(now){
       firme: FM.firme ? 1 : 0,
       prom: +(BR.prom||0).toFixed(1),
       directo: +(FM.best||0).toFixed(1),
+      rmsEntrada: +(FM.rms||0).toFixed(5),
       l0: FM.l0,
       glitch: FM.glitch,
       hold: FM.hold > 0 ? 1 : 0,
