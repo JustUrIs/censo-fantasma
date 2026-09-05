@@ -298,7 +298,7 @@
           <button class="tile" data-go="radar" style="--tint:var(--amber-hot)">
             <span class="n">MÓDULO 05 · TELEMETRÍA</span>
             <span class="t">Radar de rango</span>
-            <span class="d">Barrido FMCW 17→22 kHz. Mide <em>a qué distancia</em> está el cuerpo, no solo que se mueve.</span>
+            <span class="d">Barrido FMCW 15→20 kHz. Mide <em>a qué distancia</em> está el cuerpo, no solo que se mueve.</span>
           </button>
           <button class="tile" data-go="velo" style="--tint:var(--alert)">
             <span class="n">MÓDULO 03 · CONTRAMEDIDA</span>
@@ -396,7 +396,7 @@
       <div class="strip">
         <span><span class="dot" id="c-dot"></span><b id="c-state">EN ESPERA</b></span>
         <span>MODO <b>PASIVO ACÚSTICO</b></span>
-        <span>CANAL <b>ISM 17–22 kHz</b></span>
+        <span>CANAL <b>ISM 15–20 kHz</b></span>
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
@@ -675,7 +675,7 @@
             <input type="range" id="r-sens" min="1" max="30" step="1" value="9">
           </label>
           <label>Potencia de emisión
-            <input type="range" id="r-gain" min="1" max="30" step="1" value="10">
+            <input type="range" id="r-gain" min="1" max="45" step="1" value="26">
           </label>
           <div class="btns">
             <button class="b" data-act="clut">Reaprender clutter</button>
@@ -933,7 +933,16 @@ function tally(db, now){
    regla. Se promedia el perfil para aprender el clutter estático (paredes, mesa,
    monitor) y se lo resta. Lo que sobrevive a la resta es lo que se mueve.        */
 const FM = {
-  N:1024, RNG:560, F1:17000, F2:22000,
+  /* Banda medida sobre hardware real (parlante + micrófono de notebook):
+       12 kHz  60 dB sobre ruido      17 kHz  51 dB
+       15 kHz  57 dB                  19 kHz  33 dB
+       16 kHz  47 dB                  21 kHz  16 dB  <- practicamente nada
+     El barrido original 17-22 kHz caia justo en la peor zona. Ademas, al repartir
+     la energia en 5 kHz cada bin recibe ~32 dB menos que un tono puro: el eco
+     llegaba con unos 9 dB sobre el ruido y la correlacion daba exactamente cero.
+     15-20 kHz conserva los 5 kHz de ancho (misma resolucion, 3,4 cm) y gana ~20 dB.
+     Costo: algunos oidos jovenes llegan a escuchar el borde de abajo.            */
+  N:1024, RNG:560, F1:15000, F2:20000,
   tplI:null, tplQ:null, lags:0, profI:null, profQ:null, brI:null, brQ:null,
   sp:null, gain:null, mute:null, txSrc:null,
   prof:null, clut:null, mov:null, work:null,
@@ -949,7 +958,7 @@ function fmInit(fs){
   const N = FM.N;
   // F2 se corrige para que el barrido cierre en un número entero de ciclos:
   // así el bucle no produce discontinuidad de fase (ni chasquido audible).
-  const cyc = Math.round((N/fs) * (FM.F1 + 22000) / 2);
+  const cyc = Math.round((N/fs) * (FM.F1 + 20000) / 2);
   FM.F2 = 2*cyc*fs/N - FM.F1;
 
   FM.tplI = new Float32Array(N);
@@ -1028,7 +1037,7 @@ async function fmStart(){
   FM.txSrc.buffer = fmTxBuffer(ctx);
   FM.txSrc.loop = true;
   FM.gain = ctx.createGain();
-  FM.gain.gain.value = 0.10;
+  FM.gain.gain.value = 0.26;   // +8 dB: con 0,10 no alcanzaba
   FM.txSrc.connect(FM.gain).connect(ctx.destination);
   FM.txSrc.start();
 
@@ -2064,7 +2073,7 @@ function goto(mode){
     consola : ["Habilitar sensor acústico","IMPORTANTE: al arrancar aprende cómo suena la sala. Quedate quieto los primeros 3 segundos — si te movés durante la calibración, el equipo te toma como parte del fondo y después no te ve. Después movete para probar.","Iniciar relevamiento"],
     lab     : ["Habilitar el laboratorio","Te va a ir diciendo paso por paso qué hacer. Dura unos 4 minutos y al final te da un archivo con todo lo que midió y todo lo que marcaste vos.","Entrar al laboratorio"],
     resp    : ["Habilitar lectura de signos vitales","Emite un barrido que no vas a oír y mide en qué fase vuelve el eco. Sentate a un metro y quedate quieto: tarda unos 25 segundos en enganchar la respiración.","Iniciar lectura"],
-    radar   : ["Habilitar radar de rango","Barrido FMCW de 17 a 22 kHz. El retardo del eco es tiempo de vuelo, y el tiempo de vuelo es distancia. Quedate quieto los primeros segundos: está aprendiendo las paredes.","Iniciar telemetría"],
+    radar   : ["Habilitar radar de rango","Barrido FMCW de 15 a 20 kHz. El retardo del eco es tiempo de vuelo, y el tiempo de vuelo es distancia. Quedate quieto los primeros segundos: está aprendiendo las paredes.","Iniciar telemetría"],
     terminal: ["Habilitar sensor acústico","Tu teléfono va a emitir un tono que no vas a oír y escuchar cómo vuelve. Cuando te movés, vuelve distinto.","Relevarme"],
     velo    : ["Activar contramedida","El velo emite ruido de banda ancha en 17–22 kHz. Inutiliza cualquier relevamiento acústico del ambiente, incluido el nuestro.","Activar velo"],
     contra  : ["Habilitar escucha pasiva","No emite nada. Solo escucha la banda 17–22 kHz buscando balizas ultrasónicas de terceros.","Iniciar auditoría"]
