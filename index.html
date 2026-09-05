@@ -669,6 +669,8 @@
           <div class="row"><dt>Barridos por segundo</dt><dd id="r-cps">—</dd></div>
           <div class="row"><dt>Camino directo</dt><dd id="r-l0">—</dd></div>
           <div class="row"><dt>Clutter</dt><dd id="r-cl">APRENDIENDO</dd></div>
+          <div class="row"><dt>Calidad del emplazamiento</dt><dd class="acc" id="r-cal">—</dd></div>
+          <div class="row"><dt>Nivel de emplazamiento</dt><dd style="flex:1"><span class="meter"><i id="r-calbar"></i></span></dd></div>
         </dl>
         <div class="ctl">
           <label>Sensibilidad <span id="r-sv" style="color:var(--amber)"></span>
@@ -949,7 +951,7 @@ const FM = {
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
   node:null, cola:[], workletCargado:false, modoCaptura:"-", procesados:0, rms:0,
-  cfar:0, histBin:[], firme:false, bestMed:0, desdeScan:0,
+  cfar:0, histBin:[], firme:false, bestMed:0, desdeScan:0, calidad:0, calEma:0,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
 };
@@ -1180,6 +1182,16 @@ function fmProcess(){
   }
   FM.firme = firme;
   if(!firme){ pk = FM.peakK; pv = 0; }
+  /* Calidad del emplazamiento: cuánto sobresale el pico de la correlación por
+     encima del resto del perfil. Es la medida honesta de si la máquina está bien
+     puesta: sube si el sonido va y vuelve limpio, baja si hay algo tapando el
+     parlante o el micrófono, o si el ventilador está soplando fuerte.           */
+  let acc = 0, cnt = 0;
+  for(let l=lo;l<hi;l+=11){ acc += prof[l]; cnt++; }
+  const medPerfil = acc / Math.max(cnt,1);
+  FM.calidad = medPerfil > 0 ? best / medPerfil : 0;
+  FM.calEma = FM.calEma ? FM.calEma*0.94 + FM.calidad*0.06 : FM.calidad;
+
   FM.best = best; FM.pvRaw = pv;
   FM.peakK = pk; FM.peakV = pv / Math.max(best,1e-9); FM.targets = Math.min(tg, 9);
 
@@ -1924,6 +1936,7 @@ function labTick(now){
       rmsEntrada: +(FM.rms||0).toFixed(5),
       l0: FM.l0,
       picoDirecto: +(FM.best||0).toFixed(3),
+      calidad: +(FM.calEma||0).toFixed(2),
       reScans: FM.scan < 6 ? 0 : (FM.desdeScan === 0 ? 1 : 0),
       glitch: FM.glitch,
       hold: FM.hold > 0 ? 1 : 0,
@@ -2277,6 +2290,10 @@ function loop(){
     $("r-tg").textContent   = on ? FM.targets : 0;
     $("r-l0").textContent   = FM.l0 + " muestras";
     $("r-cl").textContent   = FM.learn < 90 ? "APRENDIENDO" : "FIJADO";
+    const q = FM.calEma;
+    $("r-cal").textContent  = q.toFixed(1) + (q < 6 ? " · MALO" : q < 12 ? " · REGULAR"
+                            : q < 25 ? " · BUENO" : " · EXCELENTE");
+    $("r-calbar").style.right = (100 - Math.min(100, q*3.2)) + "%";
     $("r-dot").className    = "dot " + (on ? "live" : "");
     $("r-state").textContent = !FM.ready ? "CALIBRANDO" : on ? "BLANCO ADQUIRIDO" : "BARRIENDO";
     return;
