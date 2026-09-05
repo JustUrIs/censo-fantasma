@@ -949,7 +949,7 @@ const FM = {
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
   node:null, cola:[], workletCargado:false, modoCaptura:"-", procesados:0, rms:0,
-  cfar:0, histBin:[], firme:false,
+  cfar:0, histBin:[], firme:false, bestMed:0, desdeScan:0,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
 };
@@ -1037,7 +1037,7 @@ async function fmStart(){
   FM.txSrc.buffer = fmTxBuffer(ctx);
   FM.txSrc.loop = true;
   FM.gain = ctx.createGain();
-  FM.gain.gain.value = 0.26;   // +8 dB: con 0,10 no alcanzaba
+  FM.gain.gain.value = 0.34;   // medido: da ~21 dB de senal en banda
   FM.txSrc.connect(FM.gain).connect(ctx.destination);
   FM.txSrc.start();
 
@@ -1107,7 +1107,14 @@ function fmProcess(){
      desfase entre bloque y barrido no cambia: el camino directo cae siempre en el
      mismo retardo. Se busca entero solo al arrancar; después se sigue una ventana
      angosta. Baja el costo de 3,2M a ~1,2M multiplicaciones por cuadro.          */
-  const full = FM.scan < 6;
+  /* La ventana de seguimiento de ±16 se puede quedar corta: si el camino directo
+     se corre (movés la laptop, cambia la temperatura), el máximo real queda fuera
+     y nunca más se recupera. Se vuelve a barrer todo si el pico se cae respecto de
+     su propio promedio, o cada ~25 segundos por las dudas.                        */
+  FM.desdeScan++;
+  const perdido = FM.bestMed > 0 && FM.best < FM.bestMed * 0.45;
+  const full = FM.scan < 6 || perdido || FM.desdeScan > 300;
+  if(full) FM.desdeScan = 0;
   const lo = full ? 0 : Math.max(0, FM.l0 - 16);
   const hi = full ? FM.lags : Math.min(FM.lags, FM.l0 + FM.RNG + 16);
   FM.scan++;
@@ -1126,6 +1133,7 @@ function fmProcess(){
   for(let l=lo;l<sTo;l++) if(prof[l] > best){ best = prof[l]; bi = l; }
   if(best <= 0) return;
   FM.l0 = bi;
+  FM.bestMed = FM.bestMed ? FM.bestMed*0.995 + best*0.005 : best;
 
   const a = FM.learn < 90 ? 0.12 : 0.012;   // aprende rápido, después se aquieta
   FM.learn++;
@@ -1915,6 +1923,8 @@ function labTick(now){
       directo: +(FM.best||0).toFixed(1),
       rmsEntrada: +(FM.rms||0).toFixed(5),
       l0: FM.l0,
+      picoDirecto: +(FM.best||0).toFixed(3),
+      reScans: FM.scan < 6 ? 0 : (FM.desdeScan === 0 ? 1 : 0),
       glitch: FM.glitch,
       hold: FM.hold > 0 ? 1 : 0,
       bpm:  BR.listo ? +BR.bpm.toFixed(2) : null,
