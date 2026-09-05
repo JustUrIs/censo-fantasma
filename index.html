@@ -939,6 +939,7 @@ const FM = {
   prof:null, clut:null, mov:null, work:null,
   l0:0, learn:0, scan:0, sens:9, peakK:0, peakV:0, targets:0,
   buf:null, fresco:false, best:0, pvRaw:0, piso:0, glitch:0,
+  node:null, cola:[], workletCargado:false, modoCaptura:"-", procesados:0,
   cfar:0, histBin:[], firme:false,
   dEma:0, vEma:0, hold:0, shown:0, tShow:0, lock:0,
   mmPerLag:0, cps:0, ready:false
@@ -990,7 +991,34 @@ function fmTxBuffer(ctx){
   return b;
 }
 
-function fmStart(){
+/* El ScriptProcessorNode corre en el hilo principal: cuando MediaPipe se pone a
+   correr su modelo, le roba el turno y el audio pierde bloques. Perder bloques
+   rompe la continuidad de fase, y sin fase continua no hay respiración posible.
+
+   El AudioWorklet corre en el hilo de audio, que tiene prioridad de tiempo real
+   y no lo puede interrumpir el dibujo ni un modelo de visión. Acumula bloques en
+   una cola y el hilo principal los procesa todos, aunque llegue tarde: puede
+   atrasarse, pero ya no puede PERDER muestras.                                  */
+const WORKLET_SRC = `
+class Captura extends AudioWorkletProcessor {
+  constructor(){ super(); this.buf = new Float32Array(4096); this.w = 0; }
+  process(inputs){
+    const ch = inputs[0] && inputs[0][0];
+    if(!ch) return true;
+    for(let i=0;i<ch.length;i++){
+      this.buf[this.w++] = ch[i];
+      if(this.w === 4096){
+        this.port.postMessage(this.buf.slice());
+        this.w = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('captura', Captura);
+`;
+
+async function fmStart(){
   const ctx = S.ctx, fs = ctx.sampleRate;
   fmInit(fs);
 
@@ -1003,14 +1031,34 @@ function fmStart(){
   FM.txSrc.start();
 
   const src = ctx.createMediaStreamSource(S.stream);
-  FM.sp = ctx.createScriptProcessor(4096, 1, 1);
-  FM.sp.onaudioprocess = fmCapturar;
-  FM.mute = ctx.createGain();
-  FM.mute.gain.value = 0;                 // el nodo debe drenar para que corra
-  src.connect(FM.sp).connect(FM.mute).connect(ctx.destination);
+  FM.cola = [];
+  try{
+    if(!FM.workletCargado){
+      const url = URL.createObjectURL(new Blob([WORKLET_SRC], {type:"application/javascript"}));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      FM.workletCargado = true;
+    }
+    FM.node = new AudioWorkletNode(ctx, "captura", {numberOfInputs:1, numberOfOutputs:0});
+    FM.node.port.onmessage = ev => {
+      FM.cola.push(ev.data);
+      if(FM.cola.length > 24){ FM.cola.shift(); FM.glitch++; }   // atraso extremo
+    };
+    src.connect(FM.node);
+    FM.modoCaptura = "worklet";
+  }catch(e){
+    // Respaldo para navegadores sin AudioWorklet.
+    FM.sp = ctx.createScriptProcessor(4096, 1, 1);
+    FM.sp.onaudioprocess = fmCapturar;
+    FM.mute = ctx.createGain(); FM.mute.gain.value = 0;
+    src.connect(FM.sp).connect(FM.mute).connect(ctx.destination);
+    FM.modoCaptura = "scriptprocessor";
+  }
 }
 
 function fmStop(){
+  if(FM.node){ try{FM.node.port.onmessage = null; FM.node.disconnect();}catch(e){} FM.node = null; }
+  FM.cola = [];
   if(FM.sp){ FM.sp.onaudioprocess = null; FM.sp.disconnect(); FM.sp = null; }
   if(FM.mute){ FM.mute.disconnect(); FM.mute = null; }
   if(FM.txSrc){ try{FM.txSrc.stop();}catch(e){} FM.txSrc.disconnect(); FM.txSrc = null; }
@@ -1697,7 +1745,7 @@ async function camIniciar(){
 async function camBucle(){
   if(!CAM.activa) return;
   try{ if(CAM.video.readyState >= 2) await CAM.pose.send({image: CAM.video}); }catch(e){}
-  setTimeout(camBucle, 90);                       // ~11 Hz, alcanza y sobra
+  setTimeout(camBucle, 320);                      // ~3 Hz: suficiente y no ahoga al audio
 }
 
 function camResultado(res){
@@ -1898,6 +1946,8 @@ function labDescargar(){
       alcanceM: +(FM.RNG*FM.mmPerLag/1000).toFixed(2),
       binsRespiracion: BR.bins ? BR.bins.length : 0,
       glitchesTotales: FM.glitch,
+      modoCaptura: FM.modoCaptura,
+      bloquesProcesados: FM.procesados,
       ventanaRespSeg: FM.cps ? +(BR.NF/(FM.cps*(FM.N/4096))).toFixed(1) : null
     },
     protocolo: LAB.modo,
@@ -2147,9 +2197,16 @@ function loop(){
   const now = performance.now();
 
   // Correlación FMCW: fuera del hilo de audio, una vez por bloque nuevo.
-  if(FM.fresco && (S.mode === "radar" || S.mode === "resp" || S.mode === "lab")){
-    FM.fresco = false;
-    fmProcess();
+  if(S.mode === "radar" || S.mode === "resp" || S.mode === "lab"){
+    let vueltas = 0;
+    while(FM.cola.length && vueltas < 6){          // ponerse al día sin colgar el dibujo
+      const blq = FM.cola.shift();
+      FM.buf.copyWithin(0, 4096);
+      FM.buf.set(blq, 4096);
+      fmProcess();
+      FM.procesados++; vueltas++;
+    }
+    if(FM.fresco){ FM.fresco = false; fmProcess(); }   // camino del respaldo
   }
 
   if(S.mode === "lab"){ labTick(now); return; }
