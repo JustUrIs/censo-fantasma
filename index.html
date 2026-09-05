@@ -673,6 +673,15 @@
           <div class="row"><dt>Nivel de emplazamiento</dt><dd style="flex:1"><span class="meter"><i id="r-calbar"></i></span></dd></div>
         </dl>
         <div class="ctl">
+          <label>Banda del barrido <span id="r-bv" style="color:var(--amber)"></span>
+            <select id="r-banda" style="background:var(--panel-2);border:1px solid var(--line);
+                    color:var(--ink);font:400 13px/1 var(--mono);padding:9px">
+              <option value="15000">15 – 20 kHz · casi inaudible</option>
+              <option value="13000">13 – 18 kHz · se oye un silbido</option>
+              <option value="11000">11 – 16 kHz · se oye claro, máxima señal</option>
+              <option value="17000">17 – 22 kHz · inaudible, poca señal</option>
+            </select>
+          </label>
           <label>Sensibilidad <span id="r-sv" style="color:var(--amber)"></span>
             <input type="range" id="r-sens" min="1" max="30" step="1" value="9">
           </label>
@@ -960,7 +969,7 @@ function fmInit(fs){
   const N = FM.N;
   // F2 se corrige para que el barrido cierre en un número entero de ciclos:
   // así el bucle no produce discontinuidad de fase (ni chasquido audible).
-  const cyc = Math.round((N/fs) * (FM.F1 + 20000) / 2);
+  const cyc = Math.round((N/fs) * (FM.F1 + (FM.F1 + 5000)) / 2);
   FM.F2 = 2*cyc*fs/N - FM.F1;
 
   FM.tplI = new Float32Array(N);
@@ -1937,6 +1946,7 @@ function labTick(now){
       l0: FM.l0,
       picoDirecto: +(FM.best||0).toFixed(3),
       calidad: +(FM.calEma||0).toFixed(2),
+      banda: FM.F1,
       reScans: FM.scan < 6 ? 0 : (FM.desdeScan === 0 ? 1 : 0),
       glitch: FM.glitch,
       hold: FM.hold > 0 ? 1 : 0,
@@ -2475,6 +2485,12 @@ $("k-sens").addEventListener("input", e=>{
   KS.sens = +e.target.value; $("k-sv").textContent = "×" + KS.sens;
 });
 
+$("r-banda").addEventListener("change", e=>{
+  FM.F1 = +e.target.value;
+  $("r-bv").textContent = (FM.F1/1000) + "–" + (FM.F1/1000 + 5) + " kHz";
+  if(S.ctx){ fmStop(); fmStart(); brInit(); }      // rearma con la banda nueva
+});
+
 $("r-sens").addEventListener("input", e=>{
   FM.sens = +e.target.value;
   $("r-sv").textContent = "×" + FM.sens;
@@ -2526,6 +2542,7 @@ window.addEventListener("resize", ()=>{
 $("c-f0v").textContent = "19.00 kHz";
 $("c-thv").textContent = "3.5 dB";
 $("r-sv").textContent  = "×9";
+$("r-bv").textContent  = "15–20 kHz";
 $("k-sv").textContent  = "×12";
 $("exp").textContent = "EXP. 17622/26 — FORM. C-4 ANEXO II — " +
   new Date().toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
