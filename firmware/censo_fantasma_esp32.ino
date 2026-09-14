@@ -23,6 +23,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include "esp_wifi.h"
+#include <math.h>
 
 #define BAUD        921600
 #define AP_SSID     "CENSO_FANTASMA"
@@ -43,14 +44,29 @@
 // ═══════════════════════════════════════════════════════════════════════════
 #if ROLE == 1
 
-#define TABLA      1024            // ranuras de la tabla hash (potencia de 2)
-#define VENTANA_MS 60000UL         // un dispositivo "sigue presente" 60 s
+#define TABLA      2048            // ranuras de la tabla hash (potencia de 2)
+#define VENTANA_MS 25000UL         // un dispositivo "sigue presente" 25 s
+
+/* UMBRAL DE CERCANIA -- el arreglo del contador que crecia para siempre.
+   Sin filtro se cuentan telefonos del edificio entero, de la vereda y del bar
+   de al lado; y como los telefonos modernos cambian de nombre cada rato, el
+   mismo aparato entra varias veces. Por eso nunca bajaba.
+
+   Filtrando por potencia de senal contamos solo lo que esta EN LA SALA: el
+   numero se estabiliza y ademas significa algo.
+
+     -55  muy cerca, pocos metros
+     -65  la sala            <- por defecto
+     -75  la sala y lo pegado
+     -95  todo (comportamiento viejo)                                        */
+#define RSSI_MIN   -65
 #define CANALES    13
 #define SALTO_MS   220             // permanencia por canal
 
 struct Ranura { uint32_t h; uint32_t visto; };
 static Ranura tabla[TABLA];
 static volatile uint32_t paquetes = 0;
+static volatile uint32_t descartados = 0;   // vistos, pero fuera de la sala
 static uint8_t canal = 1;
 static uint32_t tSalto = 0, tReporte = 0;
 
@@ -79,8 +95,9 @@ static void snifferCb(void *buf, wifi_promiscuous_pkt_type_t type){
   if (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA) return;
   const wifi_promiscuous_pkt_t *p = (wifi_promiscuous_pkt_t *)buf;
   if (p->rx_ctrl.sig_len < 24) return;             // sin cabecera completa
-  registrar(p->payload + 10);                      // addr2 = emisor
   paquetes++;
+  if (p->rx_ctrl.rssi < RSSI_MIN) { descartados++; return; }   // demasiado lejos
+  registrar(p->payload + 10);                      // addr2 = emisor
 }
 
 void setup(){
@@ -99,7 +116,7 @@ void setup(){
   esp_wifi_set_channel(canal, WIFI_SECOND_CHAN_NONE);
 
   Serial.println("#ROLE,SNIFFER");
-  Serial.println("#FMT,S,unicos,paqSeg,canal,totalPaq");
+  Serial.println("#FMT,S,cerca,paqSeg,canal,lejanos,rssiMin");
 }
 
 void loop(){
@@ -121,13 +138,15 @@ void loop(){
       if (ahora - tabla[i].visto > VENTANA_MS) tabla[i].h = 0;   // expira
       else vivos++;
     }
-    uint32_t pq = paquetes; paquetes = 0;
+    uint32_t pq = paquetes;    paquetes = 0;
+    uint32_t lj = descartados; descartados = 0;
 
-    Serial.printf("S,%lu,%lu,%u,%lu\n",
+    Serial.printf("S,%lu,%lu,%u,%lu,%d\n",
                   (unsigned long)vivos,
                   (unsigned long)(pq * 1000UL / (dt ? dt : 1)),
                   canal,
-                  (unsigned long)pq);
+                  (unsigned long)lj,
+                  RSSI_MIN);
   }
 }
 
@@ -186,7 +205,7 @@ void setup(){
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(200);
 
   if (WiFi.status() != WL_CONNECTED){
-    Serial.println("#ERROR,no encuentro el emisor. Encendé la placa ROLE 3 y reiniciá esta.");
+    Serial.println("#ERROR,no encuentro el emisor todavia. Sigo buscando solo.");
   } else {
     Serial.printf("#INFO,enlace establecido, canal %d\n", WiFi.channel());
   }
@@ -207,6 +226,27 @@ void setup(){
 
 void loop(){
   uint32_t ahora = millis();
+
+  /* Reconexion. Antes, si la receptora arrancaba antes que la emisora, buscaba
+     20 segundos en setup() y se rendia para siempre: habia que apretar RESET.
+     Ahora sigue buscando sola, y tambien se recupera si el enlace se corta.     */
+  static uint32_t tRecon = 0;
+  static bool conectado = false;
+  bool hay = WiFi.status() == WL_CONNECTED;
+  if (hay != conectado){
+    conectado = hay;
+    if (conectado) Serial.printf("#INFO,enlace establecido, canal %d\n", WiFi.channel());
+    else           Serial.println("#INFO,enlace perdido, reintentando");
+  }
+  if (!conectado){
+    if (ahora - tRecon >= 3000){
+      tRecon = ahora;
+      WiFi.disconnect();
+      WiFi.begin(AP_SSID, AP_PASS);
+      Serial.println("#INFO,buscando al emisor CENSO_FANTASMA...");
+    }
+    return;
+  }
 
   // Provocamos tráfico: cada paquete que mandamos genera un ACK entrante,
   // y cada paquete entrante trae una medición de CSI.
