@@ -310,6 +310,11 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
+          <button class="tile" data-go="aud" style="--tint:var(--amber)">
+            <span class="n">MÓDULO 10 · AUDITORIO</span>
+            <span class="t">Sala en vivo</span>
+            <span class="d">Las 4 placas a la vez. Actividad de la sala, censo de aparatos y en qué zona está la gente.</span>
+          </button>
           <button class="tile" data-go="lab" style="--tint:var(--amber-hot)">
             <span class="n">MÓDULO 09 · LABORATORIO</span>
             <span class="t">Ensayo guiado</span>
@@ -399,6 +404,42 @@
         <span>CANAL <b>ISM 15–20 kHz</b></span>
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
+        <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ AUDITORIO ============ -->
+    <section class="inst" id="v-aud" hidden>
+      <div class="scope">
+        <canvas id="awf"></canvas>
+        <div class="scope-tag" id="a-tag">ACTIVIDAD POR ENLACE · SIN PLACAS CONECTADAS</div>
+        <div class="opbar" id="aopbar">
+          <k>A</k> agregar placa &nbsp; <k>C</k> calibrar sala &nbsp; <k>H</k> ocultar panel
+        </div>
+      </div>
+      <div class="readout">
+        <div class="count-block">
+          <div class="count-label" id="a-label">Actividad de la sala</div>
+          <div class="count zero" id="a-act">—</div>
+          <div class="verdict" id="a-ver">CONECTÁ LAS PLACAS POR USB</div>
+        </div>
+        <dl class="rows" id="a-rows"></dl>
+        <div class="ctl">
+          <div class="btns">
+            <button class="b" id="a-add">Agregar placa</button>
+            <button class="b" id="a-cal">Calibrar sala</button>
+          </div>
+          <div class="hint" id="a-hint" style="width:auto">
+            Tocá <b>Agregar placa</b> una vez por cada ESP32 y elegí su puerto. Podés agregar
+            hasta cuatro. Las receptoras necesitan que la emisora esté encendida.
+          </div>
+        </div>
+      </div>
+      <div class="strip">
+        <span><span class="dot" id="a-dot"></span><b id="a-st">SIN ENLACES</b></span>
+        <span>PLACAS <b id="a-n">0</b></span>
+        <span>ZONA CALIENTE <b id="a-zona">—</b></span>
+        <span>APARATOS <b id="a-disp">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
       </div>
     </section>
@@ -2032,11 +2073,222 @@ function labDescargar(){
   setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 
+
+/* ══════════════ Auditorio · varias placas a la vez ══════════════
+   Web Serial permite abrir varios puertos desde la misma página: no hace falta
+   ningún proceso de Python en el medio. Cada placa es un "enlace" independiente,
+   con su propio lector y su propia referencia de canal.
+
+   Con 200 personas, seguir a UNA es imposible: su señal se pierde entre las demás.
+   Pero medir a la MULTITUD es fácil y mucho más espectacular, porque la señal es
+   enorme: doscientos cuerpos moviéndose deforman el canal de una manera que no se
+   puede fingir ni confundir con ruido.                                            */
+const COLORES = ["#E8A33D", "#6FA8C7", "#5E9E6E", "#C4453A"];
+const AUD = { links: [], max: 4, act: 0, actEma: 0, ref: 0, tDib: 0, tFps: 0, zona: "—" };
+
+async function audAgregar(){
+  if(!("serial" in navigator)){
+    $("a-hint").textContent = "Este navegador no expone Web Serial. Hace falta Chrome o Edge de escritorio.";
+    return;
+  }
+  if(AUD.links.length >= AUD.max){ $("a-hint").textContent = "Ya hay cuatro placas conectadas."; return; }
+  let port;
+  try{
+    port = await navigator.serial.requestPort();
+    await port.open({baudRate:921600});
+  }catch(e){
+    $("a-hint").textContent = (e && e.name === "NotFoundError")
+      ? "No elegiste ningún puerto. Volvé a tocar Agregar placa."
+      : "No pude abrir el puerto: " + (e && e.message ? e.message : e) +
+        ". Si el Monitor Serie del Arduino IDE está abierto, cerralo.";
+    return;
+  }
+  const L = {
+    port, reader:null, keep:true, buf:"", rol:null,
+    idx:AUD.links.length, color:COLORES[AUD.links.length % 4],
+    uniq:0, pps:0, ch:0, lejos:0,
+    n:0, base:null, pert:0, ema:0, rssi:0,
+    frames:0, fps:0, learn:0, hist:[]
+  };
+  AUD.links.push(L);
+  audFilas();
+  audLeer(L);
+  $("a-hint").textContent = "Placa " + (L.idx+1) + " conectada. Agregá la siguiente, o calibrá la sala.";
+}
+
+async function audLeer(L){
+  try{
+    const dec = new TextDecoderStream();
+    L.port.readable.pipeTo(dec.writable).catch(()=>{});
+    L.reader = dec.readable.getReader();
+    while(L.keep){
+      const {value, done} = await L.reader.read();
+      if(done) break;
+      L.buf += value;
+      let i;
+      while((i = L.buf.indexOf("\n")) >= 0){
+        const linea = L.buf.slice(0, i).trim();
+        L.buf = L.buf.slice(i+1);
+        if(linea) audLinea(L, linea);
+      }
+      if(L.buf.length > 16384) L.buf = "";
+    }
+  }catch(e){ L.rol = L.rol || "ERROR"; }
+}
+
+function audLinea(L, l){
+  if(l[0] === "#"){
+    const p = l.split(",");
+    if(p[0] === "#ROLE"){ L.rol = p[1]; audFilas(); }
+    return;
+  }
+  const p = l.split(",");
+  if(p[0] === "S"){
+    L.rol = "SNIFFER";
+    L.uniq = +p[1]||0; L.pps = +p[2]||0; L.ch = +p[3]||0; L.lejos = +p[4]||0;
+  } else if(p[0] === "C"){
+    L.rol = "CSI_RX";
+    const n = +p[2]||0;
+    if(n < 4 || p.length < 3+n) return;
+    L.rssi = +p[1]||0;
+    L.frames++;
+    if(!L.base || L.n !== n){
+      L.base = new Float32Array(n); L.n = n; L.learn = 0;
+      for(let i=0;i<n;i++) L.base[i] = +p[3+i] || 0;
+    }
+    const a = L.learn < 150 ? 0.09 : 0.008;
+    L.learn++;
+    let d = 0, tot = 0;
+    for(let i=0;i<n;i++){
+      const v = +p[3+i] || 0;
+      L.base[i] += (v - L.base[i]) * a;
+      const r = v - L.base[i];
+      d += r*r; tot += L.base[i]*L.base[i];
+    }
+    L.pert = Math.sqrt(d / Math.max(tot, 1e-6));
+    L.ema += (L.pert - L.ema) * 0.12;
+  }
+}
+
+function audFilas(){
+  const host = $("a-rows");
+  host.innerHTML = "";
+  AUD.links.forEach((L,i)=>{
+    const fila = document.createElement("div");
+    fila.className = "row";
+    const dt = document.createElement("dt");
+    const cua = document.createElement("span");
+    cua.style.color = L.color; cua.textContent = "■ ";
+    dt.appendChild(cua);
+    dt.appendChild(document.createTextNode("Placa " + (i+1) + " · "));
+    const rol = document.createElement("span"); rol.id = "a-rol" + i; rol.textContent = "—";
+    dt.appendChild(rol);
+    const dd = document.createElement("dd");
+    dd.className = "acc"; dd.id = "a-val" + i; dd.textContent = "—";
+    fila.appendChild(dt); fila.appendChild(dd);
+    host.appendChild(fila);
+  });
+  $("a-n").textContent = AUD.links.length;
+}
+
+function audCalibrar(){
+  AUD.ref = AUD.actEma;
+  AUD.links.forEach(L => { L.base = null; L.learn = 0; });
+  $("a-hint").textContent = "Sala calibrada. El número mide cuánto se aparta de este momento.";
+}
+
+function audTick(now){
+  const csi = AUD.links.filter(L => L.rol === "CSI_RX" && L.learn > 40);
+  let suma = 0, mejor = -1, mejorV = 0;
+  csi.forEach(L => {
+    suma += L.ema;
+    if(L.ema > mejorV){ mejorV = L.ema; mejor = L.idx; }
+  });
+  AUD.act = csi.length ? suma / csi.length : 0;
+  AUD.actEma += (AUD.act - AUD.actEma) * 0.15;
+  AUD.zona = mejor >= 0 ? "PLACA " + (mejor+1) : "—";
+
+  if(now - AUD.tFps >= 1000){
+    AUD.tFps = now;
+    AUD.links.forEach(L => { L.fps = L.frames; L.frames = 0; });
+  }
+
+  AUD.links.forEach((L,i)=>{
+    const r = $("a-rol"+i), v = $("a-val"+i);
+    if(!r || !v) return;
+    if(L.rol === "SNIFFER"){ r.textContent = "censo"; v.textContent = L.uniq + " aparatos"; }
+    else if(L.rol === "CSI_RX"){
+      r.textContent = L.learn > 40 ? "canal · " + L.fps + " Hz" : "aprendiendo";
+      v.textContent = (L.ema*1000).toFixed(1);
+    }
+    else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = "emitiendo"; }
+    else { r.textContent = "esperando datos"; v.textContent = "—"; }
+  });
+
+  const sn = AUD.links.find(L => L.rol === "SNIFFER");
+  $("a-disp").textContent = sn ? sn.uniq : "—";
+  $("a-zona").textContent = AUD.zona;
+
+  const rel = Math.max(0, (AUD.actEma - AUD.ref) * 1000);
+  const hay = csi.length > 0;
+  $("a-act").textContent = hay ? rel.toFixed(0) : "—";
+  $("a-act").classList.toggle("zero", !hay || rel < 3);
+  $("a-ver").classList.toggle("hit", rel > 12);
+  $("a-ver").textContent = !AUD.links.length ? "CONECTÁ LAS PLACAS POR USB"
+    : !hay ? "APRENDIENDO CÓMO ESTÁ LA SALA QUIETA…"
+    : rel < 3  ? "SALA EN REPOSO · NADIE SE MUEVE"
+    : rel < 12 ? "MOVIMIENTO LEVE"
+    : rel < 40 ? "LA SALA SE ESTÁ MOVIENDO"
+    : "MOVIMIENTO MASIVO";
+  $("a-dot").className = "dot " + (rel > 12 ? "hot" : hay ? "live" : "");
+  $("a-st").textContent = hay ? "MIDIENDO" : AUD.links.length ? "CALIBRANDO" : "SIN ENLACES";
+  $("a-tag").textContent = AUD.links.length
+    ? "ACTIVIDAD POR ENLACE · " + AUD.links.length + " PLACAS"
+    : "ACTIVIDAD POR ENLACE · SIN PLACAS CONECTADAS";
+
+  if(now - AUD.tDib > 55){
+    AUD.tDib = now;
+    AUD.links.forEach(L => {
+      L.hist.push(L.rol === "SNIFFER" ? Math.min(1, L.uniq/120) : Math.min(1, L.ema*22));
+      if(L.hist.length > 320) L.hist.shift();
+    });
+    const cv = $("awf"), cx = cv.getContext("2d");
+    const r = cv.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    if(cv.width !== Math.floor(r.width*dpr)){
+      cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
+    }
+    const w = cv.width, h = cv.height;
+    cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
+    cx.strokeStyle = "rgba(36,48,64,.75)"; cx.lineWidth = 1;
+    for(let i=1;i<4;i++){ const y=h*i/4; cx.beginPath(); cx.moveTo(0,y); cx.lineTo(w,y); cx.stroke(); }
+    AUD.links.forEach(L=>{
+      if(L.hist.length < 2) return;
+      cx.strokeStyle = L.color; cx.lineWidth = Math.max(2, h/200);
+      cx.beginPath();
+      L.hist.forEach((v,i)=>{
+        const x = i/(L.hist.length-1)*w, y = h - v*(h-10) - 5;
+        i ? cx.lineTo(x,y) : cx.moveTo(x,y);
+      });
+      cx.stroke();
+    });
+  }
+}
+
+function audParar(){
+  AUD.links.forEach(L=>{
+    L.keep = false;
+    try{ if(L.reader) L.reader.cancel(); }catch(e){}
+    try{ if(L.port) L.port.close(); }catch(e){}
+  });
+  AUD.links = [];
+}
+
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
                solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
-               resp:$("v-resp"), lab:$("v-lab"), gate:$("v-gate")};
+               resp:$("v-resp"), lab:$("v-lab"), aud:$("v-aud"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -2089,6 +2341,14 @@ function show(v){
 
 function goto(mode){
   if(mode === "land"){ stopAll(); show("land"); location.hash=""; return; }
+  if(mode === "aud"){
+    stopAll(); show("aud"); location.hash = "aud";
+    S.mode = "aud"; S.running = true;
+    $("aopbar").style.opacity = "1";
+    clearTimeout(opTimer);
+    opTimer = setTimeout(()=>{ $("aopbar").style.opacity = "0"; }, 10000);
+    loop(); return;
+  }
   if(mode === "cert"){ stopAll(); show("cert"); location.hash = "cert"; certIssue(); return; }
   if(mode === "csi"){
     stopAll(); show("csi"); location.hash = "csi";
@@ -2150,7 +2410,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud"];
 
 async function launch(){
   const mode = pending;
@@ -2279,6 +2539,7 @@ function loop(){
 
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
+  if(S.mode === "aud"){ audTick(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
@@ -2445,6 +2706,8 @@ $("c2-on").addEventListener("click", ()=>{
   else { $("c2-on").textContent = "Apagar cámara"; camIniciar(); }
 });
 $("c2-cal").addEventListener("click", camCalibrar);
+$("a-add").addEventListener("click", audAgregar);
+$("a-cal").addEventListener("click", audCalibrar);
 $("l-go").addEventListener("click", ()=>labIniciar(false));
 $("l-go2").addEventListener("click", ()=>labIniciar(true));
 $("l-skip").addEventListener("click", ()=>{
@@ -2500,6 +2763,13 @@ $("r-gain").addEventListener("input", e=>{
 });
 
 document.addEventListener("keydown", e=>{
+  if(current === "aud"){
+    const c = e.key.toLowerCase();
+    if(c === "a") audAgregar();
+    if(c === "c") audCalibrar();
+    if(c === "h"){ const o=$("aopbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
+    return;
+  }
   if(current === "resp"){
     const r = e.key.toLowerCase();
     if(r === "k"){ brInit(); BR.activo = true; }
