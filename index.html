@@ -2106,13 +2106,18 @@ async function audAgregar(){
   const L = {
     port, reader:null, keep:true, buf:"", rol:null,
     idx:AUD.links.length, color:COLORES[AUD.links.length % 4],
-    uniq:0, pps:0, ch:0, lejos:0,
+    uniq:0, pps:0, ch:0, lejos:0, msg:null, ultima:null,
     n:0, base:null, pert:0, ema:0, rssi:0,
     frames:0, fps:0, learn:0, hist:[]
   };
   AUD.links.push(L);
   audFilas();
   audLeer(L);
+  try{
+    await port.setSignals({dataTerminalReady:false, requestToSend:true});
+    await new Promise(r=>setTimeout(r,140));
+    await port.setSignals({requestToSend:false});
+  }catch(e){ /* algunos equipos no dejan tocar las señales: no es grave */ }
   $("a-hint").textContent = "Placa " + (L.idx+1) + " conectada. Agregá la siguiente, o calibrá la sala.";
 }
 
@@ -2137,9 +2142,14 @@ async function audLeer(L){
 }
 
 function audLinea(L, l){
+  L.ultima = l.length > 64 ? l.slice(0,64) + "…" : l;
   if(l[0] === "#"){
     const p = l.split(",");
-    if(p[0] === "#ROLE"){ L.rol = p[1]; audFilas(); }
+    if(p[0] === "#ROLE"){ L.rol = p[1]; audFilas(); return; }
+    if(p[0] === "#STAT"){ L.rol = L.rol || "CSI_RX"; L.msg = "enlace: " + (p[6] === "1" ? "si" : "NO"); return; }
+    // #INFO y #ERROR traen justamente el motivo por el que no llegan datos
+    L.msg = l.slice(1).replace(/,/g, " ");
+    if(/buscando|no encuentro|conectando/i.test(l)) L.rol = L.rol || "CSI_RX";
     return;
   }
   const p = l.split(",");
@@ -2222,7 +2232,11 @@ function audTick(now){
       v.textContent = (L.ema*1000).toFixed(1);
     }
     else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = "emitiendo"; }
-    else { r.textContent = "esperando datos"; v.textContent = "—"; }
+    else {
+      r.textContent = L.msg ? "sin rol aún" : "esperando datos";
+      v.textContent = L.msg || (L.ultima ? L.ultima : "—");
+    }
+    if(L.rol === "CSI_RX" && L.learn <= 40 && L.msg) v.textContent = L.msg;
   });
 
   const sn = AUD.links.find(L => L.rol === "SNIFFER");
