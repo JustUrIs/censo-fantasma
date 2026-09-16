@@ -288,7 +288,7 @@ void loop(){
 #elif ROLE == 3
 
 WiFiUDP udp;
-static uint32_t tTx = 0, tLed = 0;
+static uint32_t tTx = 0, tLed = 0, ecos = 0, tInf = 0;
 static bool led = false;
 
 void setup(){
@@ -309,11 +309,35 @@ void setup(){
 void loop(){
   uint32_t ahora = millis();
 
+  /* ECO. Esto es lo que faltaba para que hubiera CSI de verdad.
+     El CSI solo se genera con paquetes RECIBIDOS. La receptora mandaba pings
+     al vacio y nadie le contestaba, asi que lo unico que le llegaba eran las
+     balizas de la red: 2 o 3 por segundo. Devolviendo cada ping, cada uno de
+     esos pings pasa a ser una medicion del canal.                            */
+  int sz = udp.parsePacket();
+  if (sz > 0){
+    IPAddress quien = udp.remoteIP();
+    uint16_t  porto = udp.remotePort();
+    uint8_t   basura[16];
+    udp.read(basura, sz > 16 ? 16 : sz);
+    udp.beginPacket(quien, porto);
+    udp.write((const uint8_t*)"R", 1);
+    udp.endPacket();
+    ecos++;
+  }
+
   if (ahora - tTx >= 5){                           // ~200 paquetes por segundo
     tTx = ahora;
     udp.beginPacket(IPAddress(192,168,4,255), UDP_PORT);
     udp.write((const uint8_t*)"CENSO", 5);
     udp.endPacket();
+  }
+
+  if (ahora - tInf >= 2000){                       // cuantos pings devolvimos
+    tInf = ahora;
+    Serial.printf("#STAT,ecos,%lu,estaciones,%d\n", (unsigned long)ecos,
+                  WiFi.softAPgetStationNum());
+    ecos = 0;
   }
 
   if (ahora - tLed >= 500){                        // late = está emitiendo

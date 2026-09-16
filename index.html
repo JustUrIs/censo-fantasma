@@ -2175,6 +2175,12 @@ function audLinea(L, l){
   if(l[0] === "#"){
     const p = l.split(",");
     if(p[0] === "#ROLE"){ L.rol = p[1]; audFilas(); return; }
+    if(p[0] === "#STAT" && p[1] === "ecos"){       // lo manda la emisora
+      L.rol = "CSI_TX";
+      L.msg = "devolviendo " + Math.round((+p[2]||0)/2) + " pings/s · " +
+              (+p[4]||0) + " receptoras";
+      return;
+    }
     if(p[0] === "#STAT"){
       L.rol = L.rol || "CSI_RX";
       L.csiSeg = Math.round((+p[2]||0) / 2);        // tramas CSI por segundo
@@ -2266,7 +2272,7 @@ function audTick(now){
                     : (L.csiSeg ? "recibiendo CSI" : "sin tramas CSI");
       v.textContent = (L.ema*1000).toFixed(1);
     }
-    else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = "emitiendo"; }
+    else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = L.msg || "emitiendo"; }
     else {
       r.textContent = (L.bytes||0) + " bytes";
       v.textContent = L.msg || L.ultima || "esperando datos";
