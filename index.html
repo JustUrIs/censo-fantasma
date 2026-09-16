@@ -429,7 +429,7 @@
       </div>
       <div class="readout">
         <div class="count-block">
-          <div class="count-label" id="a-label">Actividad de la sala</div>
+          <div class="count-label" id="a-label">Actividad · desvíos sobre el ruido</div>
           <div class="count zero" id="a-act">—</div>
           <div class="verdict" id="a-ver">CONECTÁ LAS PLACAS POR USB</div>
         </div>
@@ -2101,7 +2101,8 @@ function labDescargar(){
    enorme: doscientos cuerpos moviéndose deforman el canal de una manera que no se
    puede fingir ni confundir con ruido.                                            */
 const COLORES = ["#E8A33D", "#6FA8C7", "#5E9E6E", "#C4453A"];
-const AUD = { links: [], max: 4, act: 0, actEma: 0, ref: 0, tDib: 0, tFps: 0, zona: "—" };
+const AUD = { links: [], max: 4, act: 0, actEma: 0, ref: 0, refSd: 0,
+              calibrando:false, cal:[], tCal:0, tDib: 0, tFps: 0, zona: "—" };
 
 async function audAgregar(){
   if(!("serial" in navigator)){
@@ -2219,21 +2220,46 @@ function audLinea(L, l){
     if(n < 4 || p.length < 3+n) return;
     L.rssi = +p[1]||0;
     L.frames++;
-    if(!L.base || L.n !== n){
-      L.base = new Float32Array(n); L.n = n; L.learn = 0;
-      for(let i=0;i<n;i++) L.base[i] = +p[3+i] || 0;
+
+    if(!L.tmp || L.n !== n){
+      L.tmp = new Float32Array(n); L.lento = null; L.rapido = null;
+      L.n = n; L.learn = 0;
     }
-    const a = L.learn < 150 ? 0.09 : 0.008;
+
+    /* 1) NORMALIZAR LA TRAMA POR SU PROPIA MEDIA.
+       El ESP32 mueve la ganancia de su receptor sobre la marcha. Cuando la
+       cambia, las 64 subportadoras se escalan TODAS JUNTAS, y la version
+       anterior leia ese salto global como si fuera un cuerpo enorme. Dividiendo
+       cada trama por su media queda solo la FORMA del canal, que es donde esta
+       la informacion del cuerpo. El volumen se descarta a proposito.           */
+    let suma = 0;
+    for(let i=0;i<n;i++){ const v = +p[3+i] || 0; L.tmp[i] = v; suma += v; }
+    const media = suma / n;
+    if(media < 1e-6) return;
+    for(let i=0;i<n;i++) L.tmp[i] /= media;
+
+    if(!L.lento){
+      L.lento  = new Float32Array(n); L.lento.set(L.tmp);
+      L.rapido = new Float32Array(n); L.rapido.set(L.tmp);
+    }
+
+    /* 2) RAPIDO CONTRA LENTO, en vez de "actual contra promedio".
+       Un promedio lento sigue acumulando la deriva del canal: por eso los tramos
+       quietos subian de 63 a 217 a lo largo del ensayo. Restar dos promedios con
+       constantes distintas es un pasabanda: la deriva lenta se cancela sola y lo
+       estatico tambien. Solo sobrevive lo que se mueve a ritmo humano.          */
+    const aRap = 0.35;                                   // ~65 ms
+    const aLen = L.learn < 120 ? 0.06 : 0.015;           // ~1,5 s
     L.learn++;
-    let d = 0, tot = 0;
+    let dif = 0, ref = 0;
     for(let i=0;i<n;i++){
-      const v = +p[3+i] || 0;
-      L.base[i] += (v - L.base[i]) * a;
-      const r = v - L.base[i];
-      d += r*r; tot += L.base[i]*L.base[i];
+      L.rapido[i] += (L.tmp[i] - L.rapido[i]) * aRap;
+      L.lento[i]  += (L.tmp[i] - L.lento[i])  * aLen;
+      const r = L.rapido[i] - L.lento[i];
+      dif += r*r; ref += L.lento[i]*L.lento[i];
     }
-    L.pert = Math.sqrt(d / Math.max(tot, 1e-6));
-    L.ema += (L.pert - L.ema) * 0.12;
+    L.pert = Math.sqrt(dif / Math.max(ref, 1e-9));
+    L.ema += (L.pert - L.ema) * 0.18;
   }
 }
 
@@ -2259,9 +2285,27 @@ function audFilas(){
 }
 
 function audCalibrar(){
-  AUD.ref = AUD.actEma;
-  AUD.links.forEach(L => { L.base = null; L.learn = 0; });
-  $("a-hint").textContent = "Sala calibrada. El número mide cuánto se aparta de este momento.";
+  AUD.calibrando = true; AUD.cal = []; AUD.tCal = performance.now();
+  $("a-hint").textContent = "Midiendo el ruido de la sala… quedate quieto 3 segundos.";
+}
+
+/* Durante 3 s se junta el nivel con la sala quieta y se calcula media Y desvio.
+   Asi el numero grande deja de ser una unidad arbitraria y pasa a ser "cuantos
+   desvios me aparto del ruido": 3 o mas ya es separable de verdad.            */
+function audCalTick(now){
+  if(!AUD.calibrando) return;
+  AUD.cal.push(AUD.act);
+  if(now - AUD.tCal < 3000) return;
+  const v = AUD.cal.filter(x => x > 0);
+  if(v.length > 5){
+    const mu = v.reduce((a,b)=>a+b,0)/v.length;
+    const sd = Math.sqrt(v.reduce((a,b)=>a+(b-mu)*(b-mu),0)/v.length);
+    AUD.ref = mu; AUD.refSd = Math.max(sd, mu*0.04, 1e-7);
+    $("a-hint").textContent = "Calibrado. El número es cuántos desvíos te apartás del ruido de fondo.";
+  } else {
+    $("a-hint").textContent = "No llegaron datos suficientes. Revisá que las receptoras tengan CSI.";
+  }
+  AUD.calibrando = false;
 }
 
 function audTick(now){
@@ -2272,7 +2316,8 @@ function audTick(now){
     if(L.ema > mejorV){ mejorV = L.ema; mejor = L.idx; }
   });
   AUD.act = csi.length ? suma / csi.length : 0;
-  AUDP.actual = Math.max(0, (AUD.actEma - AUD.ref) * 1000);
+  audCalTick(now);
+  AUDP.actual = AUD.refSd ? (AUD.actEma - AUD.ref) / AUD.refSd : 0;
   AUD.actEma += (AUD.act - AUD.actEma) * 0.15;
   AUD.zona = mejor >= 0 ? "PLACA " + (mejor+1) : "—";
 
@@ -2302,18 +2347,20 @@ function audTick(now){
   $("a-disp").textContent = sn ? sn.uniq : "—";
   $("a-zona").textContent = AUD.zona;
 
-  const rel = Math.max(0, (AUD.actEma - AUD.ref) * 1000);
   const hay = csi.length > 0;
-  $("a-act").textContent = hay ? rel.toFixed(0) : "—";
-  $("a-act").classList.toggle("zero", !hay || rel < 3);
-  $("a-ver").classList.toggle("hit", rel > 12);
+  const z = AUD.refSd ? (AUD.actEma - AUD.ref) / AUD.refSd : 0;
+  $("a-act").textContent = !hay ? "—" : !AUD.refSd ? "?" : z.toFixed(1);
+  $("a-act").classList.toggle("zero", !hay || z < 2);
+  $("a-ver").classList.toggle("hit", z > 4);
   $("a-ver").textContent = !AUD.links.length ? "CONECTÁ LAS PLACAS POR USB"
     : !hay ? "APRENDIENDO CÓMO ESTÁ LA SALA QUIETA…"
-    : rel < 3  ? "SALA EN REPOSO · NADIE SE MUEVE"
-    : rel < 12 ? "MOVIMIENTO LEVE"
-    : rel < 40 ? "LA SALA SE ESTÁ MOVIENDO"
+    : AUD.calibrando ? "MIDIENDO EL RUIDO · QUEDATE QUIETO"
+    : !AUD.refSd ? "TOCÁ CALIBRAR SALA PARA FIJAR EL RUIDO"
+    : z < 2  ? "SALA EN REPOSO · NADIE SE MUEVE"
+    : z < 4  ? "MOVIMIENTO LEVE"
+    : z < 8  ? "LA SALA SE ESTÁ MOVIENDO"
     : "MOVIMIENTO MASIVO";
-  $("a-dot").className = "dot " + (rel > 12 ? "hot" : hay ? "live" : "");
+  $("a-dot").className = "dot " + (z > 4 ? "hot" : hay ? "live" : "");
   $("a-st").textContent = hay ? "MIDIENDO" : AUD.links.length ? "CALIBRANDO" : "SIN ENLACES";
   $("a-tag").textContent = AUD.links.length
     ? "ACTIVIDAD POR ENLACE · " + AUD.links.length + " PLACAS"
@@ -2421,6 +2468,8 @@ function audpTick(now){
       t: +((now - AUDP.t0)/1000).toFixed(2),
       paso: AUDP.i >= 0 && AUDP.pasos[AUDP.i] ? AUDP.pasos[AUDP.i].e : "libre",
       act: +(AUDP.actual||0).toFixed(2),
+      crudo: (now - (AUDP.tCrudo||0) > 1000) ? (AUDP.tCrudo = now, AUD.links.map(L =>
+        L.tmp ? Array.from(L.tmp).filter((_,i)=>i%4===0).map(x=>+x.toFixed(3)) : null)) : undefined,
       links: AUD.links.map(L => ({
         rol: L.rol,
         pert: +((L.ema||0)*1000).toFixed(2),
