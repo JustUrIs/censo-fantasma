@@ -2106,7 +2106,7 @@ async function audAgregar(){
   const L = {
     port, reader:null, keep:true, buf:"", rol:null,
     idx:AUD.links.length, color:COLORES[AUD.links.length % 4],
-    uniq:0, pps:0, ch:0, lejos:0, msg:null, ultima:null, bytes:0,
+    uniq:0, pps:0, ch:0, lejos:0, msg:null, ultima:null, bytes:0, csiSeg:0,
     n:0, base:null, pert:0, ema:0, rssi:0,
     frames:0, fps:0, learn:0, hist:[]
   };
@@ -2175,7 +2175,12 @@ function audLinea(L, l){
   if(l[0] === "#"){
     const p = l.split(",");
     if(p[0] === "#ROLE"){ L.rol = p[1]; audFilas(); return; }
-    if(p[0] === "#STAT"){ L.rol = L.rol || "CSI_RX"; L.msg = "enlace: " + (p[6] === "1" ? "si" : "NO"); return; }
+    if(p[0] === "#STAT"){
+      L.rol = L.rol || "CSI_RX";
+      L.csiSeg = Math.round((+p[2]||0) / 2);        // tramas CSI por segundo
+      L.msg = "enlace " + (p[6] === "1" ? "SI" : "NO") + " · CSI " + L.csiSeg + "/s";
+      return;
+    }
     // #INFO y #ERROR traen justamente el motivo por el que no llegan datos
     L.msg = l.slice(1).replace(/,/g, " ");
     if(/buscando|no encuentro|conectando/i.test(l)) L.rol = L.rol || "CSI_RX";
@@ -2257,7 +2262,8 @@ function audTick(now){
     if(!r || !v) return;
     if(L.rol === "SNIFFER"){ r.textContent = "censo"; v.textContent = L.uniq + " aparatos"; }
     else if(L.rol === "CSI_RX"){
-      r.textContent = L.learn > 40 ? "canal · " + L.fps + " Hz" : "aprendiendo";
+      r.textContent = L.learn > 40 ? "canal · " + L.fps + " Hz"
+                    : (L.csiSeg ? "recibiendo CSI" : "sin tramas CSI");
       v.textContent = (L.ema*1000).toFixed(1);
     }
     else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = "emitiendo"; }

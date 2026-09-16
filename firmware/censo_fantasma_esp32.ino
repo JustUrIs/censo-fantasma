@@ -212,6 +212,13 @@ void setup(){
 
   udp.begin(UDP_PORT);
 
+  csiActivar();
+}
+
+/* En el core 3.x, activar CSI antes de asociarse no queda aplicado: la pila
+   lo reinicia al conectar. Hay que volver a pedirlo CADA vez que el enlace se
+   establece. Este era el motivo de "enlace: si" con cero tramas.            */
+void csiActivar(){
   wifi_csi_config_t cfg = {};
   cfg.lltf_en           = true;
   cfg.htltf_en          = true;
@@ -221,7 +228,9 @@ void setup(){
   cfg.manu_scale        = false;
   esp_wifi_set_csi_config(&cfg);
   esp_wifi_set_csi_rx_cb(&csiCb, NULL);
-  esp_wifi_set_csi(true);
+  esp_err_t e1 = esp_wifi_set_csi_config(&cfg);
+  esp_err_t e2 = esp_wifi_set_csi(true);
+  Serial.printf("#INFO,csi config=%d activar=%d\n", (int)e1, (int)e2);
 }
 
 void loop(){
@@ -235,7 +244,10 @@ void loop(){
   bool hay = WiFi.status() == WL_CONNECTED;
   if (hay != conectado){
     conectado = hay;
-    if (conectado) Serial.printf("#INFO,enlace establecido, canal %d\n", WiFi.channel());
+    if (conectado){
+      Serial.printf("#INFO,enlace establecido, canal %d\n", WiFi.channel());
+      csiActivar();                      // re-aplicar: sin esto no llega CSI
+    }
     else           Serial.println("#INFO,enlace perdido, reintentando");
   }
   if (!conectado){
