@@ -3,9 +3,13 @@
 
   USO: enchufa UNA placa y corre:
 
-       .\flash.ps1 1     SNIFFER   (censo de dispositivos)
-       .\flash.ps1 3     EMISOR    (solo necesita corriente)
-       .\flash.ps1 2     RECEPTOR  (va por USB a la laptop)
+       .\flash.ps1 sniffer     o  .\flash.ps1 1
+       .\flash.ps1 receptor    o  .\flash.ps1 2
+       .\flash.ps1 emisor      o  .\flash.ps1 3
+
+  OJO: el numero es el ROL, no el numero de placa. "flash.ps1 2" convierte en
+  RECEPTORA a la placa que tengas enchufada, sea cual sea. Por eso conviene
+  usar el nombre: asi es imposible confundirse.
 
   Detecta el puerto solo. No toca el archivo fuente: trabaja sobre una copia.
 
@@ -19,9 +23,17 @@
 
 param(
   [Parameter(Mandatory=$true)]
-  [ValidateSet("1","2","3")]
+  [ValidateSet("1","2","3","sniffer","censo","receptor","receptora","emisor","emisora")]
   [string]$Role
 )
+
+# Se aceptan nombres ademas de numeros: el numero es el ROL y se confunde
+# facilmente con el numero de placa.
+switch -Regex ($Role.ToLower()) {
+  "^(sniffer|censo)$"      { $Role = "1" }
+  "^(receptor|receptora)$" { $Role = "2" }
+  "^(emisor|emisora)$"     { $Role = "3" }
+}
 
 $ErrorActionPreference = "Stop"
 
@@ -36,7 +48,8 @@ $fuente = Join-Path $PSScriptRoot "censo_fantasma_esp32\censo_fantasma_esp32.ino
 $tmp    = Join-Path $env:TEMP "censo_role$Role\censo_role$Role"
 
 Write-Host ""
-Write-Host "  CENSO FANTASMA - ROLE $Role : $($nombres[$Role])" -ForegroundColor Yellow
+Write-Host "  CENSO FANTASMA - va a quedar como: $($nombres[$Role])" -ForegroundColor Yellow
+Write-Host "  (reescribe la placa que tengas enchufada AHORA)" -ForegroundColor DarkGray
 Write-Host "  ==========================================================="
 
 if (-not (Test-Path $cli))    { Write-Host "  X  No encuentro arduino-cli en $cli" -ForegroundColor Red; exit 1 }
