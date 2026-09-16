@@ -2106,39 +2106,68 @@ async function audAgregar(){
   const L = {
     port, reader:null, keep:true, buf:"", rol:null,
     idx:AUD.links.length, color:COLORES[AUD.links.length % 4],
-    uniq:0, pps:0, ch:0, lejos:0, msg:null, ultima:null,
+    uniq:0, pps:0, ch:0, lejos:0, msg:null, ultima:null, bytes:0,
     n:0, base:null, pert:0, ema:0, rssi:0,
     frames:0, fps:0, learn:0, hist:[]
   };
   AUD.links.push(L);
   audFilas();
   audLeer(L);
-  try{
-    await port.setSignals({dataTerminalReady:false, requestToSend:true});
-    await new Promise(r=>setTimeout(r,140));
-    await port.setSignals({requestToSend:false});
-  }catch(e){ /* algunos equipos no dejan tocar las señales: no es grave */ }
+  // El reset por RTS se hace SOLO si a los 2 s no llego ningun byte: si el flujo
+  // ya viene sano, no lo tocamos (tocar las señales puede cortarlo).
+  setTimeout(async ()=>{
+    if(L.bytes) return;
+    try{
+      L.msg = "sin datos, reiniciando la placa...";
+      await port.setSignals({dataTerminalReady:false, requestToSend:true});
+      await new Promise(r=>setTimeout(r,140));
+      await port.setSignals({requestToSend:false});
+    }catch(e){ L.msg = "no pude reiniciar la placa: " + (e && e.message ? e.message : e); }
+  }, 2000);
   $("a-hint").textContent = "Placa " + (L.idx+1) + " conectada. Agregá la siguiente, o calibrá la sala.";
 }
 
+/* Lector instrumentado. La version anterior envolvia todo en un catch mudo:
+   si el flujo fallaba, la fila quedaba en "esperando datos" para siempre y no
+   habia forma de saber por que. Ahora cada etapa deja rastro visible.          */
 async function audLeer(L){
+  L.msg = "abriendo flujo...";
+  if(!L.port.readable){ L.msg = "ERROR: el puerto no expone lectura (readable nulo)"; return; }
+  if(L.port.readable.locked){ L.msg = "ERROR: el puerto ya esta tomado por otro lector"; return; }
+
+  let lector;
   try{
-    const dec = new TextDecoderStream();
-    L.port.readable.pipeTo(dec.writable).catch(()=>{});
-    L.reader = dec.readable.getReader();
+    // Lectura cruda: sin TextDecoderStream ni pipeTo. Menos piezas, menos
+    // lugares donde el flujo se puede trabar en silencio.
+    lector = L.port.readable.getReader();
+    L.reader = lector;
+  }catch(e){
+    L.msg = "ERROR al tomar el lector: " + (e && e.message ? e.message : e);
+    return;
+  }
+
+  L.msg = "esperando el primer byte...";
+  const dec = new TextDecoder();
+  try{
     while(L.keep){
-      const {value, done} = await L.reader.read();
-      if(done) break;
-      L.buf += value;
+      const {value, done} = await lector.read();
+      if(done){ L.msg = "el puerto cerro el flujo"; break; }
+      if(!value || !value.length) continue;
+      L.bytes = (L.bytes || 0) + value.length;
+      L.buf += dec.decode(value, {stream:true});
       let i;
       while((i = L.buf.indexOf("\n")) >= 0){
         const linea = L.buf.slice(0, i).trim();
-        L.buf = L.buf.slice(i+1);
+        L.buf = L.buf.slice(i + 1);
         if(linea) audLinea(L, linea);
       }
       if(L.buf.length > 16384) L.buf = "";
     }
-  }catch(e){ L.rol = L.rol || "ERROR"; }
+  }catch(e){
+    L.msg = "ERROR leyendo: " + (e && e.message ? e.message : e);
+  }finally{
+    try{ lector.releaseLock(); }catch(e){}
+  }
 }
 
 function audLinea(L, l){
@@ -2233,8 +2262,8 @@ function audTick(now){
     }
     else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = "emitiendo"; }
     else {
-      r.textContent = L.msg ? "sin rol aún" : "esperando datos";
-      v.textContent = L.msg || (L.ultima ? L.ultima : "—");
+      r.textContent = (L.bytes||0) + " bytes";
+      v.textContent = L.msg || L.ultima || "esperando datos";
     }
     if(L.rol === "CSI_RX" && L.learn <= 40 && L.msg) v.textContent = L.msg;
   });
