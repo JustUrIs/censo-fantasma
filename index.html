@@ -413,6 +413,16 @@
       <div class="scope">
         <canvas id="awf"></canvas>
         <div class="scope-tag" id="a-tag">ACTIVIDAD POR ENLACE · SIN PLACAS CONECTADAS</div>
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:12px 16px;
+             background:linear-gradient(transparent,rgba(6,9,12,.94) 38%);text-align:center">
+          <div id="ap-inst" style="font-family:var(--mono);font-weight:700;
+               font-size:clamp(17px,2.9vw,30px);line-height:1.15;color:var(--ink);
+               text-wrap:balance">Tocá ENSAYO GUIADO para medir de verdad</div>
+          <div id="ap-sub" style="font-size:13.5px;color:var(--ink-dim);margin-top:5px"></div>
+          <div id="ap-cuenta" style="font-family:var(--mono);font-weight:700;
+               font-size:clamp(26px,5vw,46px);color:var(--amber);line-height:1.1;
+               font-variant-numeric:tabular-nums">—</div>
+        </div>
         <div class="opbar" id="aopbar">
           <k>A</k> agregar placa &nbsp; <k>C</k> calibrar sala &nbsp; <k>H</k> ocultar panel
         </div>
@@ -428,6 +438,13 @@
           <div class="btns">
             <button class="b" id="a-add">Agregar placa</button>
             <button class="b" id="a-cal">Calibrar sala</button>
+          </div>
+          <div class="btns">
+            <button class="b" id="ap-go">Ensayo guiado (2 min)</button>
+            <button class="b warn" id="ap-save">Descargar sesión</button>
+          </div>
+          <div class="row" style="padding-left:0;padding-right:0">
+            <dt>Muestras grabadas</dt><dd class="acc" id="ap-n">0</dd>
           </div>
           <div class="hint" id="a-hint" style="width:auto">
             Tocá <b>Agregar placa</b> una vez por cada ESP32 y elegí su puerto. Podés agregar
@@ -2255,6 +2272,7 @@ function audTick(now){
     if(L.ema > mejorV){ mejorV = L.ema; mejor = L.idx; }
   });
   AUD.act = csi.length ? suma / csi.length : 0;
+  AUDP.actual = Math.max(0, (AUD.actEma - AUD.ref) * 1000);
   AUD.actEma += (AUD.act - AUD.actEma) * 0.15;
   AUD.zona = mejor >= 0 ? "PLACA " + (mejor+1) : "—";
 
@@ -2337,6 +2355,99 @@ function audParar(){
     try{ if(L.port) L.port.close(); }catch(e){}
   });
   AUD.links = [];
+}
+
+/* ══════════════ Ensayo guiado del auditorio ══════════════
+   "A veces se mueve solo y a veces me muevo y no pasa nada" no se contesta
+   mirando la pantalla: se contesta midiendo. Este protocolo alterna tramos de
+   quietud con tramos de movimiento conocido, los etiqueta, y guarda todo. Con
+   eso se puede calcular lo unico que importa: cuanto se separa la señal del
+   ruido de fondo, y si esa separacion alcanza para un demo en vivo.            */
+const AUDP = {
+  pasos:[
+    {t:"Quieto, lejos de las placas",            s:"No te muevas. Esto mide el piso de ruido de la sala.", d:20, e:"quieto_1"},
+    {t:"Caminá entre la emisora y las receptoras", s:"Ida y vuelta, paso normal, sin parar.", d:20, e:"caminando"},
+    {t:"Quieto otra vez",                         s:"Volvé a quedarte inmóvil.", d:20, e:"quieto_2"},
+    {t:"Mano a 10 cm de la PLACA 1",              s:"Sin tocarla. Movela despacio por encima.", d:15, e:"mano_p1"},
+    {t:"Quieto",                                  s:"Bajá la mano y no te muevas.", d:12, e:"quieto_3"},
+    {t:"Mano a 10 cm de la PLACA 2",              s:"Igual que antes, pero en la otra placa.", d:15, e:"mano_p2"},
+    {t:"Quieto, tramo final",                     s:"Último tramo de referencia.", d:20, e:"quieto_final"}
+  ],
+  i:-1, tPaso:0, corriendo:false, t0:0, muestras:[], eventos:[], tMuestra:0
+};
+
+function audpIniciar(){
+  AUDP.muestras = []; AUDP.eventos = [];
+  AUDP.i = 0; AUDP.corriendo = true;
+  AUDP.t0 = performance.now(); AUDP.tPaso = AUDP.t0;
+  audCalibrar();
+  audpPaso();
+}
+
+function audpPaso(){
+  const p = AUDP.pasos[AUDP.i];
+  if(!p){
+    AUDP.corriendo = false;
+    $("ap-inst").textContent = "Ensayo completo — descargá la sesión";
+    $("ap-cuenta").textContent = "✓";
+    audpEvento("fin");
+    return;
+  }
+  $("ap-inst").textContent = p.t;
+  $("ap-sub").textContent = p.s;
+  audpEvento("paso:" + p.e);
+}
+
+function audpEvento(tipo){
+  AUDP.eventos.push({
+    t: +((performance.now() - AUDP.t0)/1000).toFixed(2),
+    tipo,
+    paso: AUDP.i >= 0 && AUDP.pasos[AUDP.i] ? AUDP.pasos[AUDP.i].e : null
+  });
+}
+
+function audpTick(now){
+  if(!AUDP.corriendo && AUDP.i < 0) return;
+
+  if(AUDP.corriendo && AUDP.pasos[AUDP.i]){
+    const resta = AUDP.pasos[AUDP.i].d - (now - AUDP.tPaso)/1000;
+    $("ap-cuenta").textContent = Math.max(0, Math.ceil(resta));
+    if(resta <= 0){ AUDP.i++; AUDP.tPaso = now; audpPaso(); }
+  }
+
+  if(now - AUDP.tMuestra >= 200){
+    AUDP.tMuestra = now;
+    AUDP.muestras.push({
+      t: +((now - AUDP.t0)/1000).toFixed(2),
+      paso: AUDP.i >= 0 && AUDP.pasos[AUDP.i] ? AUDP.pasos[AUDP.i].e : "libre",
+      act: +(AUDP.actual||0).toFixed(2),
+      links: AUD.links.map(L => ({
+        rol: L.rol,
+        pert: +((L.ema||0)*1000).toFixed(2),
+        crudo: +((L.pert||0)*1000).toFixed(2),
+        hz: L.fps || 0,
+        csi: L.csiSeg || 0
+      }))
+    });
+    $("ap-n").textContent = AUDP.muestras.length;
+  }
+}
+
+function audpDescargar(){
+  const datos = {
+    version: 1,
+    generado: new Date().toISOString(),
+    protocolo: "auditorio",
+    placas: AUD.links.map((L,i) => ({placa:i+1, rol:L.rol})),
+    eventos: AUDP.eventos,
+    muestras: AUDP.muestras
+  };
+  const blob = new Blob([JSON.stringify(datos, null, 1)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "censo_auditorio_" + new Date().toISOString().slice(0,19).replace(/[:T]/g,"-") + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 
 /* ══════════════ Vistas ══════════════ */
@@ -2594,7 +2705,7 @@ function loop(){
 
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
-  if(S.mode === "aud"){ audTick(now); return; }
+  if(S.mode === "aud"){ audTick(now); audpTick(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
     rwPush();
@@ -2763,6 +2874,8 @@ $("c2-on").addEventListener("click", ()=>{
 $("c2-cal").addEventListener("click", camCalibrar);
 $("a-add").addEventListener("click", audAgregar);
 $("a-cal").addEventListener("click", audCalibrar);
+$("ap-go").addEventListener("click", audpIniciar);
+$("ap-save").addEventListener("click", audpDescargar);
 $("l-go").addEventListener("click", ()=>labIniciar(false));
 $("l-go2").addEventListener("click", ()=>labIniciar(true));
 $("l-skip").addEventListener("click", ()=>{
