@@ -2214,52 +2214,69 @@ function audLinea(L, l){
   if(p[0] === "S"){
     L.rol = "SNIFFER";
     L.uniq = +p[1]||0; L.pps = +p[2]||0; L.ch = +p[3]||0; L.lejos = +p[4]||0;
-  } else if(p[0] === "C"){
+  } else if(p[0] === "Q" || p[0] === "C"){
     L.rol = "CSI_RX";
+    const esIQ = p[0] === "Q";
     const n = +p[2]||0;
-    if(n < 4 || p.length < 3+n) return;
+    if(n < 8) return;
+    if(p.length < 3 + (esIQ ? n*2 : n)) return;
     L.rssi = +p[1]||0;
     L.frames++;
 
-    if(!L.tmp || L.n !== n){
-      L.tmp = new Float32Array(n); L.lento = null; L.rapido = null;
+    if(!L.re || L.n !== n){
       L.n = n; L.learn = 0;
+      L.re = new Float32Array(n); L.im = new Float32Array(n);
+      L.reL = new Float32Array(n); L.imL = new Float32Array(n);
+      L.sd = new Float32Array(n); L.val = null;
     }
 
-    /* 1) NORMALIZAR LA TRAMA POR SU PROPIA MEDIA.
-       El ESP32 mueve la ganancia de su receptor sobre la marcha. Cuando la
-       cambia, las 64 subportadoras se escalan TODAS JUNTAS, y la version
-       anterior leia ese salto global como si fuera un cuerpo enorme. Dividiendo
-       cada trama por su media queda solo la FORMA del canal, que es donde esta
-       la informacion del cuerpo. El volumen se descarta a proposito.           */
-    let suma = 0;
-    for(let i=0;i<n;i++){ const v = +p[3+i] || 0; L.tmp[i] = v; suma += v; }
-    const media = suma / n;
-    if(media < 1e-6) return;
-    for(let i=0;i<n;i++) L.tmp[i] /= media;
-
-    if(!L.lento){
-      L.lento  = new Float32Array(n); L.lento.set(L.tmp);
-      L.rapido = new Float32Array(n); L.rapido.set(L.tmp);
-    }
-
-    /* 2) RAPIDO CONTRA LENTO, en vez de "actual contra promedio".
-       Un promedio lento sigue acumulando la deriva del canal: por eso los tramos
-       quietos subian de 63 a 217 a lo largo del ensayo. Restar dos promedios con
-       constantes distintas es un pasabanda: la deriva lenta se cancela sola y lo
-       estatico tambien. Solo sobrevive lo que se mueve a ritmo humano.          */
-    const aRap = 0.35;                                   // ~65 ms
-    const aLen = L.learn < 120 ? 0.06 : 0.015;           // ~1,5 s
-    L.learn++;
-    let dif = 0, ref = 0;
+    /* Se leen I y Q. La subportadora DC y las nulas se descartan: DC aporta
+       unas 650 veces mas varianza que una subportadora de datos y tapaba todo
+       lo demas. Las nulas son ceros fijos y solo ensucian la normalizacion.   */
     for(let i=0;i<n;i++){
-      L.rapido[i] += (L.tmp[i] - L.rapido[i]) * aRap;
-      L.lento[i]  += (L.tmp[i] - L.lento[i])  * aLen;
-      const r = L.rapido[i] - L.lento[i];
-      dif += r*r; ref += L.lento[i]*L.lento[i];
+      if(esIQ){ L.im[i] = +p[3+i*2] || 0; L.re[i] = +p[4+i*2] || 0; }
+      else     { L.im[i] = 0;             L.re[i] = +p[3+i] || 0; }
     }
-    L.pert = Math.sqrt(dif / Math.max(ref, 1e-9));
+
+    if(!L.val){
+      L.val = [];
+      for(let i=0;i<n;i++){
+        const mag = Math.hypot(L.re[i], L.im[i]);
+        if(i === 0 || i === n>>1) continue;          // DC y su espejo
+        if(mag < 1e-6) continue;                     // nula
+        L.val.push(i);
+      }
+      if(L.val.length < 8){ L.val = null; return; }
+      L.reL.set(L.re); L.imL.set(L.im);
+    }
+
+    // normalizar por la energia de las subportadoras validas: quita la ganancia
+    let en = 0;
+    for(const i of L.val) en += L.re[i]*L.re[i] + L.im[i]*L.im[i];
+    en = Math.sqrt(en / L.val.length);
+    if(en < 1e-6) return;
+
+    const aLen = L.learn < 150 ? 0.06 : 0.02;
+    L.learn++;
+
+    /* Metrica: distancia coseno compleja entre la trama actual y el promedio
+       lento. Usa amplitud Y fase a la vez, y es inmune a cambios de ganancia
+       porque ambos vectores van normalizados. Un cuerpo que se corre un
+       centimetro gira la fase mucho antes de tocar la amplitud.               */
+    let pr = 0, pi = 0, ea = 0, eb = 0;
+    for(const i of L.val){
+      const ar = L.re[i]/en, ai = L.im[i]/en;
+      pr += ar*L.reL[i] + ai*L.imL[i];               // parte real del producto interno
+      pi += ai*L.reL[i] - ar*L.imL[i];               // parte imaginaria
+      ea += ar*ar + ai*ai;
+      eb += L.reL[i]*L.reL[i] + L.imL[i]*L.imL[i];
+      L.reL[i] += (ar - L.reL[i]) * aLen;
+      L.imL[i] += (ai - L.imL[i]) * aLen;
+    }
+    const coseno = Math.hypot(pr, pi) / Math.max(Math.sqrt(ea*eb), 1e-9);
+    L.pert = Math.max(0, 1 - Math.min(1, coseno));
     L.ema += (L.pert - L.ema) * 0.18;
+    L.tmp = L.re;
   }
 }
 
@@ -2468,8 +2485,12 @@ function audpTick(now){
       t: +((now - AUDP.t0)/1000).toFixed(2),
       paso: AUDP.i >= 0 && AUDP.pasos[AUDP.i] ? AUDP.pasos[AUDP.i].e : "libre",
       act: +(AUDP.actual||0).toFixed(2),
-      crudo: (now - (AUDP.tCrudo||0) > 1000) ? (AUDP.tCrudo = now, AUD.links.map(L =>
-        L.tmp ? Array.from(L.tmp).filter((_,i)=>i%4===0).map(x=>+x.toFixed(3)) : null)) : undefined,
+      crudo: (now - (AUDP.tCrudo||0) > 1000) ? (AUDP.tCrudo = now, AUD.links.map(L => {
+        if(!L.val || !L.re) return null;
+        const o = [];
+        for(let k=0;k<L.val.length;k+=2){ const i=L.val[k]; o.push(L.re[i], L.im[i]); }
+        return o;
+      })) : undefined,
       links: AUD.links.map(L => ({
         rol: L.rol,
         pert: +((L.ema||0)*1000).toFixed(2),

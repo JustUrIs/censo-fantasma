@@ -160,11 +160,11 @@ void loop(){
 #elif ROLE == 2
 
 #define MAX_SUB     64
-#define MIN_PERIODO 18            // ms entre reportes → ~55 Hz, no satura el serial
+#define MIN_PERIODO 25            // ms entre reportes -> ~40 Hz (I/Q pesa el doble)
 
 static volatile uint32_t tUltimo = 0;
 static volatile uint32_t recibidos = 0;
-static char linea[600];
+static char linea[1200];
 
 static void csiCb(void *ctx, wifi_csi_info_t *info){
   if (!info || !info->buf) return;
@@ -178,12 +178,15 @@ static void csiCb(void *ctx, wifi_csi_info_t *info){
   int pares = info->len / 2;
   if (pares > MAX_SUB) pares = MAX_SUB;
 
-  int n = snprintf(linea, sizeof(linea), "C,%d,%d", info->rx_ctrl.rssi, pares);
+  /* Se manda I y Q crudos, no la magnitud.
+     Antes calculaba sqrt(re^2+im^2) aca y tiraba la fase. La fase es donde vive
+     la mayor parte de la informacion de movimiento: un cuerpo que se desplaza un
+     centimetro corre la fase muchisimo antes de cambiar la amplitud. Con solo
+     amplitud, caminar apenas se separaba 1,5 desvios del ruido.               */
+  int n = snprintf(linea, sizeof(linea), "Q,%d,%d", info->rx_ctrl.rssi, pares);
   for (int i = 0; i < pares; i++){
-    int im = b[i*2], re = b[i*2 + 1];
-    int amp = (int)(sqrtf((float)(re*re + im*im)) + 0.5f);
-    n += snprintf(linea + n, sizeof(linea) - n, ",%d", amp);
-    if (n >= (int)sizeof(linea) - 8) break;
+    n += snprintf(linea + n, sizeof(linea) - n, ",%d,%d", (int)b[i*2], (int)b[i*2 + 1]);
+    if (n >= (int)sizeof(linea) - 10) break;
   }
   linea[n++] = '\n'; linea[n] = 0;
   Serial.write((const uint8_t*)linea, n);
@@ -196,7 +199,7 @@ void setup(){
   Serial.begin(BAUD);
   delay(300);
   Serial.println("#ROLE,CSI_RX");
-  Serial.println("#FMT,C,rssi,n,amp0..ampN");
+  Serial.println("#FMT,Q,rssi,n,im0,re0,im1,re1,...");
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
