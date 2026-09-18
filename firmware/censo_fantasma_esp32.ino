@@ -78,14 +78,21 @@ static inline uint32_t hashMac(const uint8_t *m){
   return h ? h : 1;               // 0 marca ranura vacía
 }
 
-static void registrar(const uint8_t *mac){
+static void registrar(const uint8_t *mac, int8_t rssi){
   uint32_t h = hashMac(mac);
   uint32_t i = h & (TABLA - 1);
   for (int k = 0; k < 32; k++){    // sondeo lineal acotado
     uint32_t j = (i + k) & (TABLA - 1);
-    if (tabla[j].h == h || tabla[j].h == 0){
+    if (tabla[j].h == h){           // ya lo conociamos: solo refrescar
+      tabla[j].visto = millis();
+      return;
+    }
+    if (tabla[j].h == 0){           // aparato NUEVO
       tabla[j].h = h;
       tabla[j].visto = millis();
+      /* Se avisa el descubrimiento para poder dibujarlo en pantalla.
+         Sale el hash, nunca la direccion: es irreversible y no se guarda.    */
+      Serial.printf("D,%08lx,%d\n", (unsigned long)h, (int)rssi);
       return;
     }
   }
@@ -97,7 +104,7 @@ static void snifferCb(void *buf, wifi_promiscuous_pkt_type_t type){
   if (p->rx_ctrl.sig_len < 24) return;             // sin cabecera completa
   paquetes++;
   if (p->rx_ctrl.rssi < RSSI_MIN) { descartados++; return; }   // demasiado lejos
-  registrar(p->payload + 10);                      // addr2 = emisor
+  registrar(p->payload + 10, p->rx_ctrl.rssi);     // addr2 = emisor
 }
 
 void setup(){
@@ -116,7 +123,7 @@ void setup(){
   esp_wifi_set_channel(canal, WIFI_SECOND_CHAN_NONE);
 
   Serial.println("#ROLE,SNIFFER");
-  Serial.println("#FMT,S,cerca,paqSeg,canal,lejanos,rssiMin");
+  Serial.println("#FMT,S,cerca,paqSeg,canal,lejanos,rssiMin | D,hash,rssi = aparato nuevo");
 }
 
 void loop(){

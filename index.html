@@ -310,6 +310,11 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
+          <button class="tile" data-go="vivo" style="--tint:var(--amber-hot)">
+            <span class="n">MÓDULO 11 · ESCENARIO</span>
+            <span class="t">Censo en vivo</span>
+            <span class="d">Pantalla completa. Cada aparato de la sala se enciende como un punto mientras el contador trepa.</span>
+          </button>
           <button class="tile" data-go="aud" style="--tint:var(--amber)">
             <span class="n">MÓDULO 10 · AUDITORIO</span>
             <span class="t">Sala en vivo</span>
@@ -405,6 +410,35 @@
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ CENSO EN VIVO (pantalla de escenario) ============ -->
+    <section id="v-vivo" hidden style="position:absolute;inset:0;background:#06090C">
+      <canvas id="cv-lienzo" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+      <div style="position:absolute;top:0;left:0;right:0;padding:26px 34px;
+           display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+        <div>
+          <div class="kicker">INDEC · Dirección Nacional de Teledetección Habitacional</div>
+          <div id="cv-ver" style="font-family:var(--mono);font-size:15px;letter-spacing:.08em;
+               color:var(--ink-dim);margin-top:8px">ESPERANDO A LA PLACA…</div>
+        </div>
+        <div style="text-align:right">
+          <div class="count-label">Aparatos censados</div>
+          <div class="count zero" id="cv-n"
+               style="font-size:clamp(70px,15vw,190px);margin-top:2px">0</div>
+        </div>
+      </div>
+      <div class="strip" style="position:absolute;left:0;right:0;bottom:0;border-top:1px solid var(--line)">
+        <span><span class="dot live"></span><b>RELEVANDO</b></span>
+        <span>RITMO <b id="cv-rit">—</b></span>
+        <span>BARRIENDO <b id="cv-ch">—</b></span>
+        <span>PAQUETES/s <b id="cv-pps">—</b></span>
+        <span>ÚLTIMO HALLAZGO <b id="cv-ult">—</b></span>
+        <span>DIRECCIONES <b>HASHEADAS AL LEER</b></span>
+      </div>
+      <div class="opbar" id="cvopbar" style="left:34px;bottom:64px">
+        <k>P</k> conectar la placa del censo &nbsp; <k>R</k> reiniciar &nbsp; <k>H</k> ocultar
       </div>
     </section>
 
@@ -2211,8 +2245,14 @@ function audLinea(L, l){
     return;
   }
   const p = l.split(",");
+  if(p[0] === "D"){                       // aparato nuevo descubierto
+    L.rol = "SNIFFER";
+    cvNuevo(p[1], +p[2] || -70);
+    return;
+  }
   if(p[0] === "S"){
     L.rol = "SNIFFER";
+    CV.canal = +p[3]||0; CV.pps = +p[2]||0;
     L.uniq = +p[1]||0; L.pps = +p[2]||0; L.ch = +p[3]||0; L.lejos = +p[4]||0;
   } else if(p[0] === "Q" || p[0] === "C"){
     L.rol = "CSI_RX";
@@ -2520,11 +2560,114 @@ function audpDescargar(){
   setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 
+
+/* ══════════════ Censo en vivo · pantalla de escenario ══════════════
+   El censo ya funcionaba, pero se mostraba como una fila de tabla que decia
+   "6 aparatos". Eso tira a la basura el unico demo solido que tenemos.
+
+   Ahora la placa avisa CADA aparato nuevo que descubre (linea "D,hash,rssi") y
+   aca cada uno se enciende como un punto. La posicion sale del propio hash: el
+   mismo aparato cae siempre en el mismo lugar, sin que eso revele nada de el.
+   Con 200 personas son 300 puntos prendiendose de a uno mientras se habla.     */
+const CV = {
+  puntos: [], vistos: new Set(), total: 0, canal: 0, pps: 0,
+  cv: null, cx: null, tDib: 0, t0: 0, ultimo: 0
+};
+
+function cvReset(){
+  CV.puntos = []; CV.vistos = new Set(); CV.total = 0;
+  CV.t0 = performance.now(); CV.ultimo = 0;
+}
+
+/* Un aparato nuevo: entra como punto. La posicion se deriva del hash para que
+   sea estable entre apariciones, y no guarda ninguna informacion recuperable. */
+function cvNuevo(hash, rssi){
+  if(CV.vistos.has(hash)) return;
+  CV.vistos.add(hash);
+  CV.total++;
+  CV.ultimo = performance.now();
+  const h = parseInt(hash, 16) >>> 0;
+  const a = (h % 10000) / 10000;
+  const b = ((h >>> 13) % 10000) / 10000;
+  // mas cerca del centro cuanto mas fuerte llega: RSSI alto = aparato cercano
+  const fuerza = Math.max(0, Math.min(1, (rssi + 95) / 45));
+  const radio = 0.16 + (1 - fuerza) * 0.82;
+  const ang = a * Math.PI * 2;
+  CV.puntos.push({
+    x: 0.5 + Math.cos(ang) * radio * 0.46,
+    y: 0.5 + Math.sin(ang) * radio * 0.44 * (0.72 + b * 0.5),
+    nacido: performance.now(),
+    r: 1.6 + fuerza * 3.4,
+    rssi
+  });
+  if(CV.puntos.length > 1200) CV.puntos.shift();
+}
+
+function cvDibujar(now){
+  const cv = CV.cv; if(!cv) return;
+  const cx = CV.cx;
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if(cv.width !== Math.floor(r.width*dpr)){
+    cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
+  }
+  const w = cv.width, h = cv.height;
+
+  cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
+
+  // rejilla tenue, para que se lea como un instrumento y no como un salvapantallas
+  cx.strokeStyle = "rgba(36,48,64,.55)"; cx.lineWidth = 1;
+  for(let i=1;i<6;i++){
+    const y = h*i/6; cx.beginPath(); cx.moveTo(0,y); cx.lineTo(w,y); cx.stroke();
+    const x = w*i/6; cx.beginPath(); cx.moveTo(x,0); cx.lineTo(x,h); cx.stroke();
+  }
+
+  for(const p of CV.puntos){
+    const edad = (now - p.nacido) / 1000;
+    const x = p.x * w, y = p.y * h;
+    const rr = p.r * dpr;
+    if(edad < 1.1){                       // destello de aparicion
+      const t = 1 - edad/1.1;
+      cx.beginPath();
+      cx.arc(x, y, rr + t*26*dpr, 0, Math.PI*2);
+      cx.strokeStyle = "rgba(232,163,61," + (t*0.75).toFixed(3) + ")";
+      cx.lineWidth = 2*dpr; cx.stroke();
+    }
+    const brillo = edad < 1.1 ? 1 : 0.62;
+    cx.beginPath(); cx.arc(x, y, rr, 0, Math.PI*2);
+    cx.fillStyle = "rgba(255,208,138," + brillo.toFixed(2) + ")";
+    cx.fill();
+  }
+
+  // barrido de canal: se ve que el equipo esta recorriendo el espectro
+  if(CV.canal){
+    const bx = (CV.canal - 1) / 12 * w;
+    cx.fillStyle = "rgba(111,168,199,.16)";
+    cx.fillRect(bx - 3*dpr, 0, 6*dpr, h);
+  }
+}
+
+function cvTick(now){
+  cvDibujar(now);
+  $("cv-n").textContent = CV.total;
+  $("cv-n").classList.toggle("zero", CV.total === 0);
+  const seg = Math.max(1, (now - CV.t0)/1000);
+  $("cv-rit").textContent = (CV.total / seg * 60).toFixed(0) + " por minuto";
+  $("cv-ch").textContent  = CV.canal ? "CANAL " + CV.canal : "—";
+  $("cv-pps").textContent = CV.pps;
+  const desde = CV.ultimo ? ((now - CV.ultimo)/1000).toFixed(1) + " s" : "—";
+  $("cv-ult").textContent = desde;
+  $("cv-ver").textContent = CV.total === 0
+    ? "ESPERANDO A LA PLACA…"
+    : CV.total + " APARATOS · NINGUNO SE CONECTÓ A NOSOTROS";
+}
+
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
                solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
-               resp:$("v-resp"), lab:$("v-lab"), aud:$("v-aud"), gate:$("v-gate")};
+               resp:$("v-resp"), lab:$("v-lab"), aud:$("v-aud"),
+               vivo:$("v-vivo"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -2577,6 +2720,15 @@ function show(v){
 
 function goto(mode){
   if(mode === "land"){ stopAll(); show("land"); location.hash=""; return; }
+  if(mode === "vivo"){
+    stopAll(); show("vivo"); location.hash = "vivo";
+    CV.cv = $("cv-lienzo"); CV.cx = CV.cv.getContext("2d");
+    cvReset(); S.mode = "vivo"; S.running = true;
+    $("cvopbar").style.opacity = "1";
+    clearTimeout(opTimer);
+    opTimer = setTimeout(()=>{ $("cvopbar").style.opacity = "0"; }, 9000);
+    loop(); return;
+  }
   if(mode === "aud"){
     stopAll(); show("aud"); location.hash = "aud";
     S.mode = "aud"; S.running = true;
@@ -2646,7 +2798,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud","vivo"];
 
 async function launch(){
   const mode = pending;
@@ -2775,6 +2927,7 @@ function loop(){
 
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
+  if(S.mode === "vivo"){ cvTick(now); return; }
   if(S.mode === "aud"){ audTick(now); audpTick(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
   if(S.mode === "radar"){
@@ -3001,6 +3154,13 @@ $("r-gain").addEventListener("input", e=>{
 });
 
 document.addEventListener("keydown", e=>{
+  if(current === "vivo"){
+    const v = e.key.toLowerCase();
+    if(v === "p") audAgregar();
+    if(v === "r") cvReset();
+    if(v === "h"){ const o=$("cvopbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
+    return;
+  }
   if(current === "aud"){
     const c = e.key.toLowerCase();
     if(c === "a") audAgregar();
