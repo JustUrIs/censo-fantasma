@@ -6,6 +6,7 @@
        .\flash.ps1 sniffer     o  .\flash.ps1 1
        .\flash.ps1 receptor    o  .\flash.ps1 2
        .\flash.ps1 emisor      o  .\flash.ps1 3
+       .\flash.ps1 radar       o  .\flash.ps1 4
 
   OJO: el numero es el ROL, no el numero de placa. "flash.ps1 2" convierte en
   RECEPTORA a la placa que tengas enchufada, sea cual sea. Por eso conviene
@@ -23,7 +24,7 @@
 
 param(
   [Parameter(Mandatory=$true)]
-  [ValidateSet("1","2","3","sniffer","censo","receptor","receptora","emisor","emisora")]
+  [ValidateSet("1","2","3","4","sniffer","censo","receptor","receptora","emisor","emisora","radar","ld2450")]
   [string]$Role
 )
 
@@ -33,6 +34,7 @@ switch -Regex ($Role.ToLower()) {
   "^(sniffer|censo)$"      { $Role = "1" }
   "^(receptor|receptora)$" { $Role = "2" }
   "^(emisor|emisora)$"     { $Role = "3" }
+  "^(radar|ld2450)$"       { $Role = "4" }
 }
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +43,7 @@ $nombres = @{
   "1" = "SNIFFER (censo de dispositivos)"
   "2" = "RECEPTOR CSI (por USB a la laptop)"
   "3" = "EMISOR CSI (solo corriente)"
+  "4" = "RADAR LD2450 (sigue hasta 3 personas)"
 }
 
 $cli    = Join-Path $env:USERPROFILE "arduino-cli\arduino-cli.exe"
@@ -96,13 +99,52 @@ $destino = Join-Path $tmp "censo_role$Role.ino"
 Set-Content -LiteralPath $destino -Value $codigo -Encoding UTF8
 
 # --- 4. compilar y subir ----------------------------------------------------
+# Los streams se mezclan con cmd /c a proposito. En PowerShell 5.1, "2>&1" sobre
+# un .exe nativo envuelve cada linea de error en un objeto y, con
+# ErrorActionPreference=Stop, aborta el script ocultando el error real.
+function Correr($linea) {
+  $previo = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $salida = & cmd /c "$linea 2>&1"
+  $codigo = $LASTEXITCODE
+  $ErrorActionPreference = $previo
+  return @{ salida = $salida; codigo = $codigo }
+}
+
 Write-Host "  >  Compilando (tarda ~40 segundos)..."
-& $cli compile --fqbn esp32:esp32:esp32 $tmp 2>&1 | Select-Object -Last 2
-if ($LASTEXITCODE -ne 0) { Write-Host "  X  Fallo la compilacion." -ForegroundColor Red; exit 1 }
+$r = Correr "`"$cli`" compile --fqbn esp32:esp32:esp32 `"$tmp`""
+$r.salida | Select-Object -Last 2
+if ($r.codigo -ne 0) {
+  Write-Host "  X  Fallo la compilacion:" -ForegroundColor Red
+  $r.salida | Select-Object -Last 15 | ForEach-Object { Write-Host "     $_" }
+  exit 1
+}
 
 Write-Host "  >  Grabando en $puerto ..."
-& $cli upload -p $puerto --fqbn esp32:esp32:esp32 $tmp 2>&1 | Select-String "Hash of data|Wrote |rror|ailed"
-if ($LASTEXITCODE -ne 0) { Write-Host "  X  Fallo la grabacion." -ForegroundColor Red; exit 1 }
+$r = Correr "`"$cli`" upload -p $puerto --fqbn esp32:esp32:esp32 `"$tmp`""
+$r.salida | Select-String "Hash of data|Wrote " | ForEach-Object { Write-Host "     $_" }
+if ($r.codigo -ne 0) {
+  Write-Host "  X  Fallo la grabacion. Mensaje real de esptool:" -ForegroundColor Red
+  $r.salida | Select-Object -Last 18 | ForEach-Object { Write-Host "     $_" }
+  Write-Host ""
+  # Diagnostico dirigido: este mensaje aparece cuando algo colgado de los pines
+  # pisa la linea que usa el USB para programar.
+  if ($r.salida -match "TX path seems to be down|no sync reply") {
+    Write-Host "  CASI SEGURO: tenes algo cableado a los pines rotulados TX/RX." -ForegroundColor Yellow
+    Write-Host "  Esos son GPIO1 y GPIO3, los que usa el USB para grabar." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   1. Desconecta los cables TX y RX del sensor"
+    Write-Host "   2. Volve a correr este script"
+    Write-Host "   3. Reconecta el sensor a GPIO16 (su TX) y GPIO17 (su RX)"
+    Write-Host ""
+  }
+  Write-Host "  Otras causas comunes:" -ForegroundColor Yellow
+  Write-Host "   - El puerto lo tiene tomado el navegador: cerra la pestania de la app."
+  Write-Host "   - La placa no entro en modo carga: manten apretado BOOT mientras dice"
+  Write-Host "     'Connecting...', y soltalo cuando empiece a grabar."
+  Write-Host "   - Cable de solo carga: proba con otro."
+  exit 1
+}
 
 # --- 5. confirmar que arranco ----------------------------------------------
 Write-Host "  >  Verificando..."
@@ -130,5 +172,10 @@ if ($Role -eq "3") {
 }
 if ($Role -eq "2") {
   Write-Host "     Esta va por USB a la laptop. Necesita que el EMISOR este prendido."
+}
+if ($Role -eq "4") {
+  Write-Host "     CABLEADO del LD2450 (TX y RX van CRUZADOS):"
+  Write-Host "       5V  -> VIN      GND -> GND"
+  Write-Host "       TX  -> GPIO16   RX  -> GPIO17"
 }
 Write-Host ""

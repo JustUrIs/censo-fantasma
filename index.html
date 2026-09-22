@@ -310,6 +310,11 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
+          <button class="tile" data-go="planta" style="--tint:var(--celeste)">
+            <span class="n">MÓDULO 12 · PLANTA</span>
+            <span class="t">Dónde está la gente</span>
+            <span class="d">Radar de 24 GHz. Hasta 3 personas con posición real en metros, vistas desde arriba.</span>
+          </button>
           <button class="tile" data-go="vivo" style="--tint:var(--amber-hot)">
             <span class="n">MÓDULO 11 · ESCENARIO</span>
             <span class="t">Censo en vivo</span>
@@ -410,6 +415,36 @@
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ PLANTA (radar LD2450) ============ -->
+    <section id="v-planta" hidden style="position:absolute;inset:0;background:#06090C">
+      <canvas id="pl-lienzo" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+      <div style="position:absolute;top:0;left:0;right:0;padding:24px 32px;
+           display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+        <div>
+          <div class="kicker">INDEC · Teledetección Habitacional · Radar 24 GHz</div>
+          <div id="pl-ver" style="font-family:var(--mono);font-size:15px;letter-spacing:.08em;
+               color:var(--ink-dim);margin-top:8px">CONECTÁ LA PLACA DEL RADAR</div>
+        </div>
+        <div style="text-align:right">
+          <div class="count-label">Personas localizadas</div>
+          <div class="count zero" id="pl-n"
+               style="font-size:clamp(66px,13vw,160px);margin-top:2px">0</div>
+        </div>
+      </div>
+      <div class="strip" style="position:absolute;left:0;right:0;bottom:0;border-top:1px solid var(--line)">
+        <span><span class="dot live"></span><b>RASTREANDO</b></span>
+        <span>MÁS CERCANA <b id="pl-cerca">—</b></span>
+        <span>PICO <b id="pl-pico">0</b></span>
+        <span>RADARES <b id="pl-rad">0</b></span>
+        <span>ALCANCE <b id="pl-esc">6 m</b></span>
+        <span>SIN CÁMARA · SIN CONTACTO</span>
+      </div>
+      <div class="opbar" id="plopbar" style="left:32px;bottom:64px">
+        <k>P</k> conectar radar &nbsp; <k>R</k> borrar estelas &nbsp;
+        <k>+</k> <k>-</k> alcance &nbsp; <k>H</k> ocultar
       </div>
     </section>
 
@@ -2245,6 +2280,16 @@ function audLinea(L, l){
     return;
   }
   const p = l.split(",");
+  if(p[0] === "R"){                        // radar LD2450: hasta 3 objetivos
+    L.rol = "RADAR";
+    const cuantos = +p[1] || 0;
+    L.objetivos = [];
+    for(let i=0;i<3;i++){
+      L.objetivos.push({ x:+p[2+i*3]||0, y:+p[3+i*3]||0, v:+p[4+i*3]||0 });
+    }
+    L.activos = cuantos;
+    return;
+  }
   if(p[0] === "D"){                       // aparato nuevo descubierto
     L.rol = "SNIFFER";
     cvNuevo(p[1], +p[2] || -70);
@@ -2393,6 +2438,7 @@ function audTick(now){
       v.textContent = (L.ema*1000).toFixed(1);
     }
     else if(L.rol === "CSI_TX"){ r.textContent = "emisora"; v.textContent = L.msg || "emitiendo"; }
+    else if(L.rol === "RADAR"){ r.textContent = "radar"; v.textContent = (L.activos||0) + " personas"; }
     else {
       r.textContent = (L.bytes||0) + " bytes";
       v.textContent = L.msg || L.ultima || "esperando datos";
@@ -2662,12 +2708,128 @@ function cvTick(now){
     : CV.total + " APARATOS · NINGUNO SE CONECTÓ A NOSOTROS";
 }
 
+
+/* ══════════════ Planta · radar LD2450 ══════════════
+   Esto es lo que no se pudo con WiFi en semanas: posiciones reales.
+   El modulo entrega hasta 3 objetivos con X, Y (mm) y velocidad (cm/s), 10 veces
+   por segundo, ya procesados. Aca solo se dibuja la sala vista desde arriba.
+
+   Eje X: transversal, negativo a la izquierda del sensor.
+   Eje Y: de frente al sensor. Cono util: +/-60 grados, hasta 6 m.             */
+const PL = {
+  cv:null, cx:null, escala:6000,           // milimetros de fondo que entran a lo alto
+  estelas: new Map(), tDib:0, pico:0, tPico:0
+};
+
+function plantaReset(){ PL.estelas.clear(); PL.pico = 0; }
+
+function plantaRadares(){
+  return AUD.links.filter(L => L.rol === "RADAR");
+}
+
+function plantaDibujar(now){
+  const cv = PL.cv; if(!cv) return;
+  const cx = PL.cx;
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if(cv.width !== Math.floor(r.width*dpr)){
+    cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
+  }
+  const w = cv.width, h = cv.height;
+  cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
+
+  // El sensor queda abajo al centro; la sala se extiende hacia arriba.
+  const ox = w/2, oy = h - 26*dpr;
+  const k = (h - 52*dpr) / PL.escala;       // pixeles por milimetro
+
+  // anillos de distancia, cada metro
+  cx.strokeStyle = "rgba(36,48,64,.9)"; cx.lineWidth = 1*dpr;
+  cx.font = (10*dpr) + "px 'IBM Plex Mono', monospace";
+  cx.fillStyle = "rgba(90,100,114,.95)";
+  for(let m=1; m*1000 <= PL.escala; m++){
+    const rad = m*1000*k;
+    cx.beginPath(); cx.arc(ox, oy, rad, Math.PI, 2*Math.PI); cx.stroke();
+    cx.fillText(m + " m", ox + 6*dpr, oy - rad + 13*dpr);
+  }
+  // cono de vision: +/-60 grados
+  cx.strokeStyle = "rgba(111,168,199,.4)";
+  for(const g of [-60, 60]){
+    const a = g * Math.PI/180;
+    cx.beginPath(); cx.moveTo(ox, oy);
+    cx.lineTo(ox + Math.sin(a)*PL.escala*k, oy - Math.cos(a)*PL.escala*k);
+    cx.stroke();
+  }
+  // el sensor
+  cx.fillStyle = "#6FA8C7";
+  cx.beginPath(); cx.arc(ox, oy, 5*dpr, 0, Math.PI*2); cx.fill();
+
+  let vivos = 0, masCerca = null;
+  plantaRadares().forEach((L, ri) => {
+    (L.objetivos || []).forEach((t, ti) => {
+      if(!t.x && !t.y) return;
+      vivos++;
+      const d = Math.hypot(t.x, t.y);
+      if(masCerca === null || d < masCerca) masCerca = d;
+
+      const px = ox + t.x*k, py = oy - t.y*k;
+      const clave = ri + ":" + ti;
+      let est = PL.estelas.get(clave);
+      if(!est){ est = []; PL.estelas.set(clave, est); }
+      est.push({x:px, y:py, t:now});
+      while(est.length && now - est[0].t > 4000) est.shift();
+
+      const col = COLORES[(ri*3 + ti) % 4];
+      // estela
+      cx.lineWidth = 2*dpr;
+      for(let i=1;i<est.length;i++){
+        const a = (1 - (now - est[i].t)/4000) * 0.55;
+        cx.strokeStyle = col.replace("#","rgba(")
+          .replace(/^rgba\(/, "rgba(") ;
+        cx.globalAlpha = a; cx.strokeStyle = col;
+        cx.beginPath(); cx.moveTo(est[i-1].x, est[i-1].y); cx.lineTo(est[i].x, est[i].y); cx.stroke();
+      }
+      cx.globalAlpha = 1;
+
+      // halo si se mueve
+      const vel = Math.abs(t.v);
+      if(vel > 2){
+        cx.beginPath(); cx.arc(px, py, (11 + vel*0.5)*dpr, 0, Math.PI*2);
+        cx.strokeStyle = col; cx.globalAlpha = 0.35; cx.lineWidth = 2*dpr; cx.stroke();
+        cx.globalAlpha = 1;
+      }
+      cx.beginPath(); cx.arc(px, py, 8*dpr, 0, Math.PI*2);
+      cx.fillStyle = col; cx.fill();
+
+      cx.fillStyle = "#E9E3D6";
+      cx.font = (12*dpr) + "px 'IBM Plex Mono', monospace";
+      cx.fillText((d/1000).toFixed(2).replace(".",",") + " m",
+                  px + 13*dpr, py + 4*dpr);
+    });
+  });
+
+  if(vivos > PL.pico){ PL.pico = vivos; PL.tPico = now; }
+
+  $("pl-n").textContent = vivos;
+  $("pl-n").classList.toggle("zero", vivos === 0);
+  $("pl-ver").classList.toggle("hit", vivos > 0);
+  $("pl-ver").textContent = !plantaRadares().length
+    ? "CONECTÁ LA PLACA DEL RADAR"
+    : vivos === 0 ? "VOLUMEN VACÍO · NADIE EN EL CONO"
+    : vivos === 1 ? "1 PERSONA LOCALIZADA"
+    : vivos + " PERSONAS LOCALIZADAS";
+  $("pl-cerca").textContent = masCerca !== null
+    ? (masCerca/1000).toFixed(2).replace(".",",") + " m" : "—";
+  $("pl-pico").textContent = PL.pico;
+  $("pl-rad").textContent = plantaRadares().length;
+  $("pl-esc").textContent = (PL.escala/1000) + " m";
+}
+
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
                solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
                resp:$("v-resp"), lab:$("v-lab"), aud:$("v-aud"),
-               vivo:$("v-vivo"), gate:$("v-gate")};
+               vivo:$("v-vivo"), planta:$("v-planta"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -2720,6 +2882,15 @@ function show(v){
 
 function goto(mode){
   if(mode === "land"){ stopAll(); show("land"); location.hash=""; return; }
+  if(mode === "planta"){
+    stopAll(); show("planta"); location.hash = "planta";
+    PL.cv = $("pl-lienzo"); PL.cx = PL.cv.getContext("2d");
+    plantaReset(); S.mode = "planta"; S.running = true;
+    $("plopbar").style.opacity = "1";
+    clearTimeout(opTimer);
+    opTimer = setTimeout(()=>{ $("plopbar").style.opacity = "0"; }, 10000);
+    loop(); return;
+  }
   if(mode === "vivo"){
     stopAll(); show("vivo"); location.hash = "vivo";
     CV.cv = $("cv-lienzo"); CV.cx = CV.cv.getContext("2d");
@@ -2798,7 +2969,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud","vivo"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud","vivo","planta"];
 
 async function launch(){
   const mode = pending;
@@ -2927,6 +3098,7 @@ function loop(){
 
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
+  if(S.mode === "planta"){ plantaDibujar(now); return; }
   if(S.mode === "vivo"){ cvTick(now); return; }
   if(S.mode === "aud"){ audTick(now); audpTick(now); return; }
   if(S.mode === "csi"){ kPush(); kTick(); return; }
@@ -3154,6 +3326,15 @@ $("r-gain").addEventListener("input", e=>{
 });
 
 document.addEventListener("keydown", e=>{
+  if(current === "planta"){
+    const q = e.key.toLowerCase();
+    if(q === "p") audAgregar();
+    if(q === "r") plantaReset();
+    if(e.key === "+" || e.key === "=") PL.escala = Math.min(8000, PL.escala + 1000);
+    if(e.key === "-" || e.key === "_") PL.escala = Math.max(2000, PL.escala - 1000);
+    if(q === "h"){ const o=$("plopbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
+    return;
+  }
   if(current === "vivo"){
     const v = e.key.toLowerCase();
     if(v === "p") audAgregar();

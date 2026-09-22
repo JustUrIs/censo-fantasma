@@ -11,6 +11,7 @@
        ROLE 1 = SNIFFER   → censo de dispositivos.      1 placa.  No necesita las otras.
        ROLE 2 = CSI_RX    → receptor de CSI (por USB a la laptop).
        ROLE 3 = CSI_TX    → emisor. Solo necesita corriente (power bank).
+       ROLE 4 = RADAR     → puente al LD2450 (sigue hasta 3 personas).
 
    Para el censo de dispositivos:      1 placa con ROLE 1.
    Para todo lo demás (CSI):           1 placa ROLE 3 + 1 placa ROLE 2.
@@ -357,6 +358,88 @@ void loop(){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ROLE 4 — RADAR LD2450: sigue hasta 3 personas con coordenadas reales
+//
+// El modulo hace todo el trabajo duro y entrega posiciones ya calculadas por
+// UART a 256000 baudios, 10 veces por segundo. Esta placa solo traduce.
+//
+// CABLEADO (el TX va cruzado con el RX; si van derechos no llega NADA):
+//
+//     LD2450         ESP32 NodeMCU
+//     -------        --------------
+//     5V     -----> VIN        (5V del USB)
+//     GND    -----> GND
+//     TX     -----> GPIO16  (RX2)   <-- cruzado
+//     RX     <----- GPIO17  (TX2)   <-- cruzado
+//
+// Trama: AA FF 03 00 + 3 objetivos de 8 bytes + 55 CC = 30 bytes.
+// Cada objetivo: X (mm), Y (mm), velocidad (cm/s), resolucion (mm).
+// Los enteros vienen en signo-magnitud: el bit mas alto es el SIGNO, no parte
+// del numero. Leerlos como complemento a dos da posiciones absurdas.
+// ═══════════════════════════════════════════════════════════════════════════
+#elif ROLE == 4
+
+#define RADAR_RX   16
+#define RADAR_TX   17
+#define RADAR_BAUD 256000
+
+static uint8_t tr[64];
+static int     largo = 0;
+static uint32_t tEstado = 0, tramas = 0;
+
+// signo-magnitud: bit 15 encendido = positivo
+static int16_t leerCoord(uint8_t bajo, uint8_t alto){
+  int16_t v = ((alto & 0x7F) << 8) | bajo;
+  return (alto & 0x80) ? v : -v;
+}
+
+void setup(){
+  Serial.begin(BAUD);
+  delay(300);
+  Serial2.begin(RADAR_BAUD, SERIAL_8N1, RADAR_RX, RADAR_TX);
+  Serial.println("#ROLE,RADAR");
+  Serial.println("#FMT,R,n,x1,y1,v1,x2,y2,v2,x3,y3,v3  (mm y cm/s)");
+  Serial.println("#INFO,si no llegan tramas revisa que TX y RX esten CRUZADOS");
+}
+
+void loop(){
+  while (Serial2.available()){
+    uint8_t b = Serial2.read();
+
+    if (largo < 4){                       // buscando la cabecera
+      const uint8_t cab[4] = {0xAA, 0xFF, 0x03, 0x00};
+      if (b == cab[largo]) tr[largo++] = b;
+      else                 largo = (b == 0xAA) ? (tr[0] = 0xAA, 1) : 0;
+      continue;
+    }
+
+    tr[largo++] = b;
+    if (largo < 30) continue;
+    largo = 0;
+    if (tr[28] != 0x55 || tr[29] != 0xCC) continue;   // cola invalida
+
+    tramas++;
+    int activos = 0;
+    int16_t x[3], y[3], v[3];
+    for (int i = 0; i < 3; i++){
+      const uint8_t *o = tr + 4 + i*8;
+      x[i] = leerCoord(o[0], o[1]);
+      y[i] = leerCoord(o[2], o[3]);
+      v[i] = leerCoord(o[4], o[5]);
+      if (x[i] || y[i]) activos++;        // ranura vacia = todo en cero
+    }
+    Serial.printf("R,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                  activos, x[0], y[0], v[0], x[1], y[1], v[1], x[2], y[2], v[2]);
+  }
+
+  if (millis() - tEstado >= 2000){
+    tEstado = millis();
+    Serial.printf("#STAT,tramas,%lu\n", (unsigned long)tramas);
+    tramas = 0;
+  }
+}
+
 #else
-  #error "ROLE tiene que ser 1 (SNIFFER), 2 (CSI_RX) o 3 (CSI_TX)"
+  #error "ROLE tiene que ser 1 (SNIFFER), 2 (CSI_RX), 3 (CSI_TX) o 4 (RADAR)"
 #endif
