@@ -310,6 +310,11 @@
             <span class="t">Contravigilancia</span>
             <span class="d">Escucha pasiva. Detecta balizas ultrasónicas de terceros operando en el ambiente.</span>
           </button>
+          <button class="tile" data-go="cotejo" style="--tint:var(--ok)">
+            <span class="n">MÓDULO 13 · COTEJO</span>
+            <span class="t">Cámara contra radar</span>
+            <span class="d">La cámara cuenta personas con un modelo de visión y se compara con el radar, en vivo.</span>
+          </button>
           <button class="tile" data-go="planta" style="--tint:var(--celeste)">
             <span class="n">MÓDULO 12 · PLANTA</span>
             <span class="t">Dónde está la gente</span>
@@ -415,6 +420,41 @@
         <span>MUESTREO <b id="c-sr">—</b></span>
         <span>VENTANA <b id="c-win">—</b></span>
         <span>LEY 17.622 ART. 10 · <b>SECRETO ESTADÍSTICO</b></span>
+      </div>
+    </section>
+
+    <!-- ============ COTEJO (cámara vs radar) ============ -->
+    <section id="v-cotejo" hidden style="position:absolute;inset:0;background:#06090C">
+      <canvas id="cj-lienzo" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+      <div style="position:absolute;top:0;left:0;right:0;padding:22px 30px;
+           display:flex;justify-content:space-between;align-items:flex-start;gap:24px">
+        <div>
+          <div class="kicker">Verdad de campo · visión contra radio</div>
+          <div id="cj-ver" style="font-family:var(--mono);font-size:15px;letter-spacing:.07em;
+               color:var(--ink-dim);margin-top:8px">TOCÁ INICIAR PARA ENCENDER LA CÁMARA</div>
+        </div>
+        <div style="display:flex;gap:34px;text-align:right">
+          <div>
+            <div class="count-label">Cámara</div>
+            <div class="count zero" id="cj-cam" style="font-size:clamp(48px,9vw,110px)">—</div>
+          </div>
+          <div>
+            <div class="count-label">Radar</div>
+            <div class="count zero" id="cj-rad" style="font-size:clamp(48px,9vw,110px)">—</div>
+          </div>
+        </div>
+      </div>
+      <div style="position:absolute;left:30px;bottom:74px;display:flex;gap:8px">
+        <button class="b" id="cj-go">Iniciar cámara</button>
+        <button class="b" id="cj-p">Conectar radar</button>
+      </div>
+      <div class="hint" id="cj-est" style="position:absolute;right:30px;bottom:74px;
+           max-width:46ch;text-align:right">La cámara no se graba ni sale de tu máquina.</div>
+      <div class="strip" style="position:absolute;left:0;right:0;bottom:0;border-top:1px solid var(--line)">
+        <span><span class="dot live"></span><b>COTEJANDO</b></span>
+        <span>COINCIDENCIA <b id="cj-ac">—</b></span>
+        <span>VISIÓN <b id="cj-fps">—</b></span>
+        <span>EL VIDEO NO SE GUARDA</span>
       </div>
     </section>
 
@@ -2765,6 +2805,8 @@ function plantaSeguir(now){
     const sitio = dispo.sitios[ri] || {x:0,y:0,rot:0};
     (L.objetivos || []).forEach(t => {
       if(!t.x && !t.y) return;
+      // Los rebotes en paredes llegan como objetivos lejanos: se descartan.
+      if(Math.hypot(t.x, t.y) > PL.escala) return;
       detecciones.push(aSala(t, sitio));
     });
   });
@@ -2900,12 +2942,148 @@ function plantaDibujar(now){
     : "sin placas";
 }
 
+
+/* ══════════════ Cotejo · cámara contra radar ══════════════
+   Hasta ahora discutiamos si el radar acierta. Esto lo zanja: la camara detecta
+   personas con un modelo de vision y se muestran los dos numeros al lado, en
+   vivo. Si coinciden, el radar acierta; si no, se ve en que falla y cuanto.
+
+   Y de paso resuelve lo otro: grabar la pantalla con las cajas de la camara y
+   los puntos del radar moviendose juntos es mucho mas contundente que un numero.
+
+   El modelo (COCO-SSD sobre TensorFlow.js) se descarga recien al entrar a este
+   modulo: son varios megas y no tiene sentido cargarlos si no se usan.         */
+const CJ = {
+  video:null, cv:null, cx:null, modelo:null, cargando:false,
+  personas: [], cuadros:0, fps:0, tFps:0, tDet:0, activa:false,
+  acuerdos:0, total:0, err:null
+};
+
+function cjGuion(src){
+  return new Promise((ok, mal) => {
+    const e = document.createElement("script");
+    e.src = src; e.onload = ok; e.onerror = () => mal(new Error("no cargo " + src));
+    document.head.appendChild(e);
+  });
+}
+
+async function cjIniciar(){
+  if(CJ.activa || CJ.cargando) return;
+  CJ.cargando = true;
+  $("cj-est").textContent = "Pidiendo la cámara…";
+  try{
+    CJ.video = document.createElement("video");
+    CJ.video.autoplay = true; CJ.video.playsInline = true; CJ.video.muted = true;
+    CJ.video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video:{ width:{ideal:640}, height:{ideal:480} }, audio:false
+    });
+    await CJ.video.play();
+  }catch(e){
+    CJ.err = "Cámara denegada: " + (e && e.name ? e.name : e);
+    $("cj-est").textContent = CJ.err; CJ.cargando = false; return;
+  }
+  $("cj-est").textContent = "Descargando el modelo de visión (unos megas)…";
+  try{
+    if(typeof cocoSsd === "undefined"){
+      await cjGuion("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js");
+      await cjGuion("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
+    }
+    CJ.modelo = await cocoSsd.load({base:"lite_mobilenet_v2"});
+  }catch(e){
+    CJ.err = "No pude cargar el modelo: " + (e && e.message ? e.message : e) +
+             " (¿hay internet?)";
+    $("cj-est").textContent = CJ.err; CJ.cargando = false; return;
+  }
+  CJ.activa = true; CJ.cargando = false;
+  $("cj-est").textContent = "Listo. La cámara no se graba ni sale de tu máquina.";
+  cjBucle();
+}
+
+async function cjBucle(){
+  if(!CJ.activa) return;
+  try{
+    if(CJ.video.readyState >= 2 && CJ.modelo){
+      const r = await CJ.modelo.detect(CJ.video, 10, 0.45);
+      CJ.personas = r.filter(o => o.class === "person");
+      CJ.cuadros++;
+    }
+  }catch(e){}
+  setTimeout(cjBucle, 140);                 // ~7 Hz: alcanza y no ahoga la maquina
+}
+
+function cjParar(){
+  CJ.activa = false;
+  try{ if(CJ.video && CJ.video.srcObject) CJ.video.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){}
+}
+
+function cjTick(now){
+  const cv = CJ.cv; if(!cv) return;
+  const cx = CJ.cx;
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if(cv.width !== Math.floor(r.width*dpr)){
+    cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
+  }
+  const w = cv.width, h = cv.height;
+  cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
+
+  if(CJ.video && CJ.video.videoWidth){
+    const vw = CJ.video.videoWidth, vh = CJ.video.videoHeight;
+    const esc = Math.min(w/vw, h/vh);
+    const dw = vw*esc, dh = vh*esc, dx = (w-dw)/2, dy = (h-dh)/2;
+    cx.drawImage(CJ.video, dx, dy, dw, dh);
+
+    cx.lineWidth = 3*dpr;
+    cx.font = (13*dpr) + "px 'IBM Plex Mono', monospace";
+    CJ.personas.forEach((p, i) => {
+      const [bx, by, bw, bh] = p.bbox;
+      const x = dx + bx*esc, y = dy + by*esc, ww = bw*esc, hh = bh*esc;
+      cx.strokeStyle = COLORES[i % 4];
+      cx.strokeRect(x, y, ww, hh);
+      cx.fillStyle = COLORES[i % 4];
+      cx.fillRect(x, y - 19*dpr, 92*dpr, 19*dpr);
+      cx.fillStyle = "#0A0D11";
+      cx.fillText("PERSONA " + (i+1), x + 5*dpr, y - 5*dpr);
+    });
+  }
+
+  if(now - CJ.tFps >= 1000){
+    CJ.tFps = now; CJ.fps = CJ.cuadros; CJ.cuadros = 0;
+  }
+
+  // el radar, medido con el mismo seguidor que usa el plano
+  plantaSeguir(now);
+  const radar = PL.pistas.filter(p => p.firme).length;
+  const cam = CJ.personas.length;
+
+  if(CJ.activa && now - CJ.tDet > 900){
+    CJ.tDet = now; CJ.total++;
+    if(cam === radar) CJ.acuerdos++;
+  }
+
+  $("cj-cam").textContent = CJ.activa ? cam : "—";
+  $("cj-rad").textContent = plantaRadares().length ? radar : "—";
+  $("cj-cam").classList.toggle("zero", !CJ.activa || cam === 0);
+  $("cj-rad").classList.toggle("zero", radar === 0);
+
+  const coincide = CJ.activa && plantaRadares().length && cam === radar;
+  $("cj-ver").classList.toggle("hit", coincide);
+  $("cj-ver").textContent = !CJ.activa ? (CJ.err || "TOCÁ INICIAR PARA ENCENDER LA CÁMARA")
+    : !plantaRadares().length ? "FALTA CONECTAR EL RADAR (tecla P)"
+    : coincide ? "COINCIDEN · EL RADAR ACIERTA"
+    : cam > radar ? "EL RADAR VE " + (cam - radar) + " MENOS"
+                  : "EL RADAR VE " + (radar - cam) + " DE MÁS";
+  $("cj-ac").textContent = CJ.total ? Math.round(CJ.acuerdos/CJ.total*100) + " %" : "—";
+  $("cj-fps").textContent = CJ.fps + " Hz";
+}
+
 /* ══════════════ Vistas ══════════════ */
 const $ = id => document.getElementById(id);
 const views = {land:$("v-land"), consola:$("v-consola"), radar:$("v-radar"),
                solo:$("v-solo"), cert:$("v-cert"), csi:$("v-csi"),
                resp:$("v-resp"), lab:$("v-lab"), aud:$("v-aud"),
-               vivo:$("v-vivo"), planta:$("v-planta"), gate:$("v-gate")};
+               vivo:$("v-vivo"), planta:$("v-planta"),
+               cotejo:$("v-cotejo"), gate:$("v-gate")};
 
 /* ══════════════ Certificado de No Existencia ══════════════
    El organismo no puede acreditar presencia. Solo puede acreditar que no hubo
@@ -2958,6 +3136,11 @@ function show(v){
 
 function goto(mode){
   if(mode === "land"){ stopAll(); show("land"); location.hash=""; return; }
+  if(mode === "cotejo"){
+    stopAll(); show("cotejo"); location.hash = "cotejo";
+    CJ.cv = $("cj-lienzo"); CJ.cx = CJ.cv.getContext("2d");
+    S.mode = "cotejo"; S.running = true; loop(); return;
+  }
   if(mode === "planta"){
     stopAll(); show("planta"); location.hash = "planta";
     PL.cv = $("pl-lienzo"); PL.cx = PL.cv.getContext("2d");
@@ -3045,7 +3228,7 @@ function micDiag(err){
   return name + " — " + (err && err.message ? err.message : "fallo al abrir el sensor.");
 }
 
-const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud","vivo","planta"];
+const MODOS = ["consola","radar","terminal","velo","contra","cert","csi","resp","lab","aud","vivo","planta","cotejo"];
 
 async function launch(){
   const mode = pending;
@@ -3148,6 +3331,7 @@ function addBtn(host, label, fn){
 function stopAll(){
   S.running = false;
   BR.activo = false;
+  cjParar();
   emitOff(); jamOff(); fmStop();
   if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream = null; S.analyser = null; }
   $("s-big").classList.remove("pulse");
@@ -3174,6 +3358,7 @@ function loop(){
 
   if(S.mode === "lab"){ labTick(now); return; }
   if(S.mode === "resp"){ brDibujar(now); return; }
+  if(S.mode === "cotejo"){ cjTick(now); return; }
   if(S.mode === "planta"){ plantaDibujar(now); return; }
   if(S.mode === "vivo"){ cvTick(now); return; }
   if(S.mode === "aud"){ audTick(now); audpTick(now); return; }
@@ -3345,6 +3530,8 @@ $("c2-on").addEventListener("click", ()=>{
 $("c2-cal").addEventListener("click", camCalibrar);
 $("a-add").addEventListener("click", audAgregar);
 $("a-cal").addEventListener("click", audCalibrar);
+$("cj-go").addEventListener("click", cjIniciar);
+$("cj-p").addEventListener("click", audAgregar);
 $("ap-go").addEventListener("click", audpIniciar);
 $("ap-save").addEventListener("click", audpDescargar);
 $("l-go").addEventListener("click", ()=>labIniciar(false));
