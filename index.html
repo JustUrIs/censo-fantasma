@@ -441,6 +441,8 @@
         <span>RADARES <b id="pl-rad">0</b></span>
         <span>ALCANCE <b id="pl-esc">6 m</b></span>
         <span>DISPOSICIÓN <b id="pl-disp">—</b></span>
+        <span>DIAG <b id="pl-diag">—</b></span>
+        <span>PLACAS <b id="pl-lin">—</b></span>
         <span>SIN CÁMARA · SIN CONTACTO</span>
       </div>
       <div class="opbar" id="plopbar" style="left:32px;bottom:64px">
@@ -2767,6 +2769,7 @@ function plantaSeguir(now){
     });
   });
 
+  PL.crudas = detecciones.length;
   const usadas = new Set();
   for(const p of PL.pistas){
     let mejor = -1, mejorD = 800;                 // puerta de asociacion, mm
@@ -2889,6 +2892,12 @@ function plantaDibujar(now){
   $("pl-rad").textContent = plantaRadares().length;
   $("pl-esc").textContent = (PL.escala/1000) + " m";
   $("pl-disp").textContent = dispo.nombre;
+  const tent = PL.pistas.filter(p => !p.firme).length;
+  $("pl-diag").textContent = PL.crudas + " crudas · " + vivos + " firmes · " + tent + " tentativas";
+  const rs = plantaRadares();
+  $("pl-lin").textContent = rs.length
+    ? rs.map((L,i) => "R" + (i+1) + ":" + (L.activos != null ? L.activos : "?")).join("  ")
+    : "sin placas";
 }
 
 /* ══════════════ Vistas ══════════════ */
