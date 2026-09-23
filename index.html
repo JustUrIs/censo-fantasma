@@ -491,7 +491,7 @@
       </div>
       <div class="opbar" id="plopbar" style="left:32px;bottom:64px">
         <k>P</k> conectar radar &nbsp; <k>R</k> borrar estelas &nbsp;
-        <k>+</k> <k>-</k> alcance &nbsp; <k>D</k> disposición &nbsp; <k>H</k> ocultar
+        <k>+</k> <k>-</k> alcance &nbsp; <k>D</k> disposición &nbsp; <k>X</k> MODO CRUDO &nbsp; <k>H</k> ocultar
       </div>
     </section>
 
@@ -2811,7 +2811,7 @@ function cvTick(now){
 
 const PL = {
   cv:null, cx:null, escala:6000,
-  pistas: [],            // pistas confirmadas, en coordenadas de la sala
+  pistas: [], crudo:false,   // pistas confirmadas, en coordenadas de la sala
   sigId: 1, tDib:0, pico:0, disp:0,
   // Donde esta parado cada radar y hacia donde mira (grados, 0 = hacia arriba)
   /* Con cables de 1 m no se pueden separar los radares, pero SI se los puede
@@ -2848,13 +2848,24 @@ function plantaSeguir(now){
     const sitio = dispo.sitios[ri] || {x:0,y:0,rot:0};
     (L.objetivos || []).forEach(t => {
       if(!t.x && !t.y) return;
-      // Los rebotes en paredes llegan como objetivos lejanos: se descartan.
-      if(Math.hypot(t.x, t.y) > PL.escala) return;
+      if(!PL.crudo && Math.hypot(t.x, t.y) > PL.escala * 1.6) return;
       detecciones.push(aSala(t, sitio));
     });
   });
 
   PL.crudas = detecciones.length;
+
+  /* Modo crudo (tecla X): se saltea la confirmacion y el sostenimiento y se
+     dibuja exactamente lo que reporta el modulo. Sirve para saber, en vivo,
+     si el problema es el sensor o mi procesamiento.                          */
+  if(PL.crudo){
+    PL.pistas = detecciones.map((d,i) => ({
+      id:i+1, x:d.x, y:d.y, v:d.v, visto:now, golpes:9, firme:true,
+      estela:[{x:d.x, y:d.y, t:now}]
+    }));
+    return;
+  }
+
   const usadas = new Set();
   for(const p of PL.pistas){
     let mejor = -1, mejorD = 800;                 // puerta de asociacion, mm
@@ -2912,7 +2923,7 @@ function plantaDibujar(now){
   $("pl-pico").textContent = PL.pico;
   $("pl-rad").textContent  = plantaRadares().length;
   $("pl-esc").textContent  = (PL.escala/1000) + " m";
-  $("pl-disp").textContent = PL.DISPOS[PL.disp].nombre;
+  $("pl-disp").textContent = (PL.crudo ? "CRUDO · " : "") + PL.DISPOS[PL.disp].nombre;
   const tent = PL.pistas.filter(p => !p.firme).length;
   $("pl-diag").textContent = PL.crudas + " crudas · " + vivos + " firmes · " + tent + " tentativas";
   const rs = plantaRadares();
@@ -3695,6 +3706,9 @@ document.addEventListener("keydown", e=>{
     if(c === "p") audAgregar();
     if(c === "c") cjCalibrar();
     if(c === "i") cjIniciar();
+    if(c === "x"){ PL.crudo = !PL.crudo; plantaReset(); }
+    if(e.key === "+" || e.key === "=") PL.escala = Math.min(8000, PL.escala + 1000);
+    if(e.key === "-" || e.key === "_") PL.escala = Math.max(2000, PL.escala - 1000);
     return;
   }
   if(current === "planta"){
@@ -3704,6 +3718,7 @@ document.addEventListener("keydown", e=>{
     if(e.key === "+" || e.key === "=") PL.escala = Math.min(8000, PL.escala + 1000);
     if(e.key === "-" || e.key === "_") PL.escala = Math.max(2000, PL.escala - 1000);
     if(q === "d"){ PL.disp = (PL.disp + 1) % PL.DISPOS.length; plantaReset(); }
+    if(q === "x"){ PL.crudo = !PL.crudo; plantaReset(); }
     if(q === "h"){ const o=$("plopbar"); o.style.opacity = o.style.opacity==="0" ? "1" : "0"; }
     return;
   }
