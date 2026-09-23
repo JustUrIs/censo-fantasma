@@ -447,6 +447,7 @@
       <div style="position:absolute;left:30px;bottom:74px;display:flex;gap:8px">
         <button class="b" id="cj-go">Iniciar cámara</button>
         <button class="b" id="cj-p">Conectar radar</button>
+        <button class="b" id="cj-cal">Calibrar a 2 m</button>
       </div>
       <div class="hint" id="cj-est" style="position:absolute;right:30px;bottom:74px;
            max-width:46ch;text-align:right">La cámara no se graba ni sale de tu máquina.</div>
@@ -454,6 +455,9 @@
         <span><span class="dot live"></span><b>COTEJANDO</b></span>
         <span>COINCIDENCIA <b id="cj-ac">—</b></span>
         <span>VISIÓN <b id="cj-fps">—</b></span>
+        <span>DIST. CÁMARA <b id="cj-dc">—</b></span>
+        <span>DIST. RADAR <b id="cj-dr">—</b></span>
+        <span>DIFERENCIA <b id="cj-dif">—</b></span>
         <span>EL VIDEO NO SE GUARDA</span>
       </div>
     </section>
@@ -2851,73 +2855,9 @@ function plantaDibujar(now){
   if(cv.width !== Math.floor(r.width*dpr)){
     cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
   }
-  const w = cv.width, h = cv.height;
-
   plantaSeguir(now);
-
-  cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
-  const ox = w/2, oy = h - 26*dpr;
-  const k = (h - 52*dpr) / PL.escala;
-
-  cx.strokeStyle = "rgba(36,48,64,.9)"; cx.lineWidth = 1*dpr;
-  cx.font = (10*dpr) + "px 'IBM Plex Mono', monospace";
-  cx.fillStyle = "rgba(90,100,114,.95)";
-  for(let m=1; m*1000 <= PL.escala; m++){
-    const rad = m*1000*k;
-    cx.beginPath(); cx.arc(ox, oy, rad, Math.PI, 2*Math.PI); cx.stroke();
-    cx.fillText(m + " m", ox + 6*dpr, oy - rad + 13*dpr);
-  }
-
-  const dispo = PL.DISPOS[PL.disp];
-  plantaRadares().forEach((L, ri) => {
-    const s = dispo.sitios[ri] || {x:0,y:0,rot:0};
-    const sx = ox + s.x*k, sy = oy - s.y*k;
-    const col = COLORES[ri % 4];
-    cx.strokeStyle = col; cx.globalAlpha = 0.32; cx.lineWidth = 1.5*dpr;
-    for(const g of [-60, 60]){
-      const a = (g + s.rot) * Math.PI/180;
-      cx.beginPath(); cx.moveTo(sx, sy);
-      cx.lineTo(sx + Math.sin(a)*6000*k, sy - Math.cos(a)*6000*k);
-      cx.stroke();
-    }
-    cx.globalAlpha = 1;
-    cx.fillStyle = col;
-    cx.beginPath(); cx.arc(sx, sy, 6*dpr, 0, Math.PI*2); cx.fill();
-    cx.font = (11*dpr) + "px 'IBM Plex Mono', monospace";
-    cx.fillText("R" + (ri+1), sx + 10*dpr, sy + 4*dpr);
-  });
-
-  let vivos = 0, masCerca = null;
-  for(const p of PL.pistas){
-    if(!p.firme) continue;
-    vivos++;
-    const d = Math.hypot(p.x, p.y);
-    if(masCerca === null || d < masCerca) masCerca = d;
-    const px = ox + p.x*k, py = oy - p.y*k;
-    const col = COLORES[(p.id - 1) % 4];
-
-    cx.lineWidth = 2*dpr; cx.strokeStyle = col;
-    for(let i=1;i<p.estela.length;i++){
-      cx.globalAlpha = (1 - (now - p.estela[i].t)/4000) * 0.5;
-      cx.beginPath();
-      cx.moveTo(ox + p.estela[i-1].x*k, oy - p.estela[i-1].y*k);
-      cx.lineTo(ox + p.estela[i].x*k,   oy - p.estela[i].y*k);
-      cx.stroke();
-    }
-    cx.globalAlpha = 1;
-
-    if(Math.abs(p.v) > 2){
-      cx.beginPath(); cx.arc(px, py, (11 + Math.abs(p.v)*0.5)*dpr, 0, Math.PI*2);
-      cx.strokeStyle = col; cx.globalAlpha = 0.35; cx.lineWidth = 2*dpr; cx.stroke();
-      cx.globalAlpha = 1;
-    }
-    cx.beginPath(); cx.arc(px, py, 8*dpr, 0, Math.PI*2);
-    cx.fillStyle = col; cx.fill();
-    cx.fillStyle = "#E9E3D6";
-    cx.font = (12*dpr) + "px 'IBM Plex Mono', monospace";
-    cx.fillText((d/1000).toFixed(2).replace(".",",") + " m", px + 13*dpr, py + 4*dpr);
-  }
-
+  const R = plantaRender(cx, 0, 0, cv.width, cv.height, dpr, now, false);
+  const vivos = R.vivos, masCerca = R.masCerca;
   if(vivos > PL.pico) PL.pico = vivos;
 
   $("pl-n").textContent = vivos;
@@ -2929,11 +2869,11 @@ function plantaDibujar(now){
     : vivos === 1 ? "1 PERSONA LOCALIZADA"
     : vivos + " PERSONAS LOCALIZADAS";
   $("pl-cerca").textContent = masCerca !== null
-    ? (masCerca/1000).toFixed(2).replace(".",",") + " m" : "—";
+    ? (masCerca/1000).toFixed(2).replace(".", ",") + " m" : "—";
   $("pl-pico").textContent = PL.pico;
-  $("pl-rad").textContent = plantaRadares().length;
-  $("pl-esc").textContent = (PL.escala/1000) + " m";
-  $("pl-disp").textContent = dispo.nombre;
+  $("pl-rad").textContent  = plantaRadares().length;
+  $("pl-esc").textContent  = (PL.escala/1000) + " m";
+  $("pl-disp").textContent = PL.DISPOS[PL.disp].nombre;
   const tent = PL.pistas.filter(p => !p.firme).length;
   $("pl-diag").textContent = PL.crudas + " crudas · " + vivos + " firmes · " + tent + " tentativas";
   const rs = plantaRadares();
@@ -2941,7 +2881,6 @@ function plantaDibujar(now){
     ? rs.map((L,i) => "R" + (i+1) + ":" + (L.activos != null ? L.activos : "?")).join("  ")
     : "sin placas";
 }
-
 
 /* ══════════════ Cotejo · cámara contra radar ══════════════
    Hasta ahora discutiamos si el radar acierta. Esto lo zanja: la camara detecta
@@ -3016,6 +2955,83 @@ function cjParar(){
   try{ if(CJ.video && CJ.video.srcObject) CJ.video.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){}
 }
 
+/* Dibuja el plano del radar dentro de un rectangulo cualquiera del lienzo.
+   Se extrajo para poder usar el mismo plano en pantalla completa y en la mitad
+   derecha del cotejo, sin duplicar codigo ni que se desincronicen.            */
+function plantaRender(cx, X, Y, W, H, dpr, now, compacto){
+  cx.save();
+  cx.beginPath(); cx.rect(X, Y, W, H); cx.clip();
+  cx.fillStyle = "#06090C"; cx.fillRect(X, Y, W, H);
+
+  const ox = X + W/2, oy = Y + H - 22*dpr;
+  const k = (H - 44*dpr) / PL.escala;
+
+  cx.strokeStyle = "rgba(36,48,64,.9)"; cx.lineWidth = 1*dpr;
+  cx.font = (10*dpr) + "px 'IBM Plex Mono', monospace";
+  cx.fillStyle = "rgba(90,100,114,.95)";
+  for(let m=1; m*1000 <= PL.escala; m++){
+    const rad = m*1000*k;
+    cx.beginPath(); cx.arc(ox, oy, rad, Math.PI, 2*Math.PI); cx.stroke();
+    cx.fillText(m + " m", ox + 6*dpr, oy - rad + 13*dpr);
+  }
+
+  const dispo = PL.DISPOS[PL.disp];
+  plantaRadares().forEach((L, ri) => {
+    const s = dispo.sitios[ri] || {x:0,y:0,rot:0};
+    const sx = ox + s.x*k, sy = oy - s.y*k;
+    const col = COLORES[ri % 4];
+    cx.strokeStyle = col; cx.globalAlpha = 0.3; cx.lineWidth = 1.5*dpr;
+    for(const g of [-60, 60]){
+      const a = (g + s.rot) * Math.PI/180;
+      cx.beginPath(); cx.moveTo(sx, sy);
+      cx.lineTo(sx + Math.sin(a)*PL.escala*k, sy - Math.cos(a)*PL.escala*k);
+      cx.stroke();
+    }
+    cx.globalAlpha = 1; cx.fillStyle = col;
+    cx.beginPath(); cx.arc(sx, sy, 6*dpr, 0, Math.PI*2); cx.fill();
+  });
+
+  let vivos = 0, masCerca = null;
+  for(const p of PL.pistas){
+    if(!p.firme) continue;
+    vivos++;
+    const d = Math.hypot(p.x, p.y);
+    if(masCerca === null || d < masCerca) masCerca = d;
+    const px = ox + p.x*k, py = oy - p.y*k;
+    const col = COLORES[(p.id - 1) % 4];
+
+    cx.lineWidth = 2*dpr; cx.strokeStyle = col;
+    for(let i=1;i<p.estela.length;i++){
+      cx.globalAlpha = (1 - (now - p.estela[i].t)/4000) * 0.5;
+      cx.beginPath();
+      cx.moveTo(ox + p.estela[i-1].x*k, oy - p.estela[i-1].y*k);
+      cx.lineTo(ox + p.estela[i].x*k,   oy - p.estela[i].y*k);
+      cx.stroke();
+    }
+    cx.globalAlpha = 1;
+    if(Math.abs(p.v) > 2){
+      cx.beginPath(); cx.arc(px, py, (11 + Math.abs(p.v)*0.5)*dpr, 0, Math.PI*2);
+      cx.strokeStyle = col; cx.globalAlpha = 0.35; cx.lineWidth = 2*dpr; cx.stroke();
+      cx.globalAlpha = 1;
+    }
+    cx.beginPath(); cx.arc(px, py, 8*dpr, 0, Math.PI*2);
+    cx.fillStyle = col; cx.fill();
+    cx.fillStyle = "#E9E3D6";
+    cx.font = (12*dpr) + "px 'IBM Plex Mono', monospace";
+    cx.fillText((d/1000).toFixed(2).replace(".",",") + " m", px + 13*dpr, py + 4*dpr);
+  }
+  cx.restore();
+  return { vivos, masCerca };
+}
+
+/* ══════════════ Cotejo · pantalla partida ══════════════
+   Izquierda lo que ve la camara, derecha lo que ve el radar, al mismo tiempo.
+   Ese es el momento: taparse con una frazada o meterse detras de una pared hace
+   que la caja de la camara desaparezca y el punto del radar siga ahi.
+
+   La distancia por camara sale del alto de la caja: una persona mide ~1,70 m, y
+   el alto en pixeles baja con la distancia. Se fija una vez parandose a 2 m y
+   apretando C; a partir de ahi son metros de verdad y se pueden comparar.      */
 function cjTick(now){
   const cv = CJ.cv; if(!cv) return;
   const cx = CJ.cx;
@@ -3025,37 +3041,57 @@ function cjTick(now){
     cv.width = Math.floor(r.width*dpr); cv.height = Math.floor(r.height*dpr);
   }
   const w = cv.width, h = cv.height;
+  const partido = w > h * 1.15;                 // en pantallas angostas, apilado
+  const W1 = partido ? w/2 : w, H1 = partido ? h : h/2;
+  const X2 = partido ? w/2 : 0, Y2 = partido ? 0 : h/2;
+  const W2 = partido ? w/2 : w, H2 = partido ? h : h/2;
+
   cx.fillStyle = "#06090C"; cx.fillRect(0,0,w,h);
 
+  // ── izquierda: camara ──
+  let camDist = null;
   if(CJ.video && CJ.video.videoWidth){
     const vw = CJ.video.videoWidth, vh = CJ.video.videoHeight;
-    const esc = Math.min(w/vw, h/vh);
-    const dw = vw*esc, dh = vh*esc, dx = (w-dw)/2, dy = (h-dh)/2;
+    const esc = Math.min(W1/vw, H1/vh);
+    const dw = vw*esc, dh = vh*esc, dx = (W1-dw)/2, dy = (H1-dh)/2;
+    cx.save(); cx.beginPath(); cx.rect(0,0,W1,H1); cx.clip();
     cx.drawImage(CJ.video, dx, dy, dw, dh);
-
     cx.lineWidth = 3*dpr;
     cx.font = (13*dpr) + "px 'IBM Plex Mono', monospace";
     CJ.personas.forEach((p, i) => {
       const [bx, by, bw, bh] = p.bbox;
       const x = dx + bx*esc, y = dy + by*esc, ww = bw*esc, hh = bh*esc;
+      const d = CJ.K ? CJ.K / bh : null;
+      if(d !== null && (camDist === null || d < camDist)) camDist = d;
       cx.strokeStyle = COLORES[i % 4];
       cx.strokeRect(x, y, ww, hh);
       cx.fillStyle = COLORES[i % 4];
-      cx.fillRect(x, y - 19*dpr, 92*dpr, 19*dpr);
+      cx.fillRect(x, y - 19*dpr, (d!==null?128:96)*dpr, 19*dpr);
       cx.fillStyle = "#0A0D11";
-      cx.fillText("PERSONA " + (i+1), x + 5*dpr, y - 5*dpr);
+      cx.fillText("PERSONA " + (i+1) + (d!==null ? "  " + d.toFixed(2).replace(".",",") + " m" : ""),
+                  x + 5*dpr, y - 5*dpr);
     });
+    cx.restore();
   }
+  CJ.dist = camDist;
 
-  if(now - CJ.tFps >= 1000){
-    CJ.tFps = now; CJ.fps = CJ.cuadros; CJ.cuadros = 0;
-  }
-
-  // el radar, medido con el mismo seguidor que usa el plano
+  // ── derecha: radar ──
   plantaSeguir(now);
-  const radar = PL.pistas.filter(p => p.firme).length;
-  const cam = CJ.personas.length;
+  const R = plantaRender(cx, X2, Y2, W2, H2, dpr, now, true);
 
+  // separador y rotulos
+  cx.strokeStyle = "rgba(36,48,64,1)"; cx.lineWidth = 2*dpr;
+  cx.beginPath();
+  if(partido){ cx.moveTo(w/2, 0); cx.lineTo(w/2, h); } else { cx.moveTo(0, h/2); cx.lineTo(w, h/2); }
+  cx.stroke();
+  cx.font = "700 " + (12*dpr) + "px 'IBM Plex Mono', monospace";
+  cx.fillStyle = "rgba(233,227,214,.75)";
+  cx.fillText("CÁMARA · LUZ VISIBLE", 16*dpr, 24*dpr);
+  cx.fillText("RADAR · ONDAS DE RADIO", X2 + 16*dpr, Y2 + 24*dpr);
+
+  if(now - CJ.tFps >= 1000){ CJ.tFps = now; CJ.fps = CJ.cuadros; CJ.cuadros = 0; }
+
+  const cam = CJ.personas.length, radar = R.vivos;
   if(CJ.activa && now - CJ.tDet > 900){
     CJ.tDet = now; CJ.total++;
     if(cam === radar) CJ.acuerdos++;
@@ -3072,9 +3108,23 @@ function cjTick(now){
     : !plantaRadares().length ? "FALTA CONECTAR EL RADAR (tecla P)"
     : coincide ? "COINCIDEN · EL RADAR ACIERTA"
     : cam > radar ? "EL RADAR VE " + (cam - radar) + " MENOS"
-                  : "EL RADAR VE " + (radar - cam) + " DE MÁS";
-  $("cj-ac").textContent = CJ.total ? Math.round(CJ.acuerdos/CJ.total*100) + " %" : "—";
+    : "EL RADAR LO VE, LA CÁMARA NO";
+
+  $("cj-ac").textContent  = CJ.total ? Math.round(CJ.acuerdos/CJ.total*100) + " %" : "—";
   $("cj-fps").textContent = CJ.fps + " Hz";
+  $("cj-dc").textContent  = camDist !== null ? camDist.toFixed(2).replace(".",",") + " m"
+                          : (CJ.K ? "—" : "sin calibrar (tecla C)");
+  $("cj-dr").textContent  = R.masCerca !== null ? (R.masCerca/1000).toFixed(2).replace(".",",") + " m" : "—";
+  $("cj-dif").textContent = (camDist !== null && R.masCerca !== null)
+    ? Math.abs(camDist - R.masCerca/1000).toFixed(2).replace(".",",") + " m" : "—";
+}
+
+/* Calibracion de la camara: pararse a 2 m y apretar C. */
+function cjCalibrar(){
+  const p = CJ.personas[0];
+  if(!p){ $("cj-est").textContent = "No te veo. Ponete en cuadro, de cuerpo entero."; return; }
+  CJ.K = 2.0 * p.bbox[3];
+  $("cj-est").textContent = "Calibrado a 2 m. Ahora la cámara también mide en metros.";
 }
 
 /* ══════════════ Vistas ══════════════ */
@@ -3532,6 +3582,7 @@ $("a-add").addEventListener("click", audAgregar);
 $("a-cal").addEventListener("click", audCalibrar);
 $("cj-go").addEventListener("click", cjIniciar);
 $("cj-p").addEventListener("click", audAgregar);
+$("cj-cal").addEventListener("click", cjCalibrar);
 $("ap-go").addEventListener("click", audpIniciar);
 $("ap-save").addEventListener("click", audpDescargar);
 $("l-go").addEventListener("click", ()=>labIniciar(false));
@@ -3589,6 +3640,13 @@ $("r-gain").addEventListener("input", e=>{
 });
 
 document.addEventListener("keydown", e=>{
+  if(current === "cotejo"){
+    const c = e.key.toLowerCase();
+    if(c === "p") audAgregar();
+    if(c === "c") cjCalibrar();
+    if(c === "i") cjIniciar();
+    return;
+  }
   if(current === "planta"){
     const q = e.key.toLowerCase();
     if(q === "p") audAgregar();
