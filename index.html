@@ -2286,7 +2286,9 @@ async function audAgregar(){
   }catch(e){
     const m = (e && e.message) ? e.message : String(e);
     if(!/already open/i.test(m)){
-      audMsg("No pude abrir el puerto: " + m + ". Cerra el Monitor Serie del Arduino IDE.");
+      audMsg(/Failed to open|NetworkError/i.test(m)
+        ? "EL PUERTO ESTA TOMADO POR OTRO PROGRAMA. Casi seguro es OTRA PESTANA de esta misma app: cerra todas y deja una sola. Tambien puede ser el Monitor Serie del Arduino IDE o una consola de PowerShell leyendo la placa."
+        : "No pude abrir el puerto: " + m);
       return;
     }
   }
