@@ -2220,23 +2220,17 @@ const COLORES = ["#E8A33D", "#6FA8C7", "#5E9E6E", "#C4453A"];
 const AUD = { links: [], max: 4, act: 0, actEma: 0, ref: 0, refSd: 0,
               calibrando:false, cal:[], tCal:0, tDib: 0, tFps: 0, zona: "—" };
 
-async function audAgregar(){
-  if(!("serial" in navigator)){
-    $("a-hint").textContent = "Este navegador no expone Web Serial. Hace falta Chrome o Edge de escritorio.";
-    return;
-  }
-  if(AUD.links.length >= AUD.max){ $("a-hint").textContent = "Ya hay cuatro placas conectadas."; return; }
-  let port;
-  try{
-    port = await navigator.serial.requestPort();
-    await port.open({baudRate:921600});
-  }catch(e){
-    $("a-hint").textContent = (e && e.name === "NotFoundError")
-      ? "No elegiste ningún puerto. Volvé a tocar Agregar placa."
-      : "No pude abrir el puerto: " + (e && e.message ? e.message : e) +
-        ". Si el Monitor Serie del Arduino IDE está abierto, cerralo.";
-    return;
-  }
+/* Los avisos iban a un elemento que solo existe en la vista del Auditorio: en
+   Planta y Cotejo quedaban invisibles y los fallos parecian silencio.        */
+function audMsg(t){
+  AUD.msg = t;
+  ["a-hint","cj-est"].forEach(id => {
+    const e = document.getElementById(id);
+    if(e) e.textContent = t;
+  });
+}
+
+function audEnchufar(port){
   const L = {
     port, reader:null, keep:true, buf:"", rol:null,
     idx:AUD.links.length, color:COLORES[AUD.links.length % 4],
@@ -2247,18 +2241,57 @@ async function audAgregar(){
   AUD.links.push(L);
   audFilas();
   audLeer(L);
-  // El reset por RTS se hace SOLO si a los 2 s no llego ningun byte: si el flujo
-  // ya viene sano, no lo tocamos (tocar las señales puede cortarlo).
   setTimeout(async ()=>{
     if(L.bytes) return;
     try{
-      L.msg = "sin datos, reiniciando la placa...";
       await port.setSignals({dataTerminalReady:false, requestToSend:true});
       await new Promise(r=>setTimeout(r,140));
       await port.setSignals({requestToSend:false});
-    }catch(e){ L.msg = "no pude reiniciar la placa: " + (e && e.message ? e.message : e); }
+    }catch(e){}
   }, 2000);
-  $("a-hint").textContent = "Placa " + (L.idx+1) + " conectada. Agregá la siguiente, o calibrá la sala.";
+  return L;
+}
+
+/* Web Serial recuerda los puertos ya autorizados: reconectarlos solo evita
+   tener que elegir en el selector cada vez, y evita el error de "ya abierto"
+   al cambiar de vista.                                                       */
+async function audAuto(){
+  if(!("serial" in navigator)) return;
+  let puertos = [];
+  try{ puertos = await navigator.serial.getPorts(); }catch(e){ return; }
+  let sumados = 0;
+  for(const port of puertos){
+    if(AUD.links.some(L => L.port === port)) continue;
+    if(AUD.links.length >= AUD.max) break;
+    try{ await port.open({baudRate:921600}); }
+    catch(e){ if(!/already open/i.test(e.message||"")) continue; }
+    audEnchufar(port); sumados++;
+  }
+  if(sumados) audMsg(sumados + " placa(s) reconectada(s) sola(s).");
+}
+
+async function audAgregar(){
+  if(!("serial" in navigator)){
+    audMsg("Este navegador no expone Web Serial. Hace falta Chrome o Edge de escritorio.");
+    return;
+  }
+  if(AUD.links.length >= AUD.max){ audMsg("Ya hay cuatro placas conectadas."); return; }
+  let port;
+  try{
+    port = await navigator.serial.requestPort();
+  }catch(e){ audMsg("No elegiste ningun puerto. Volve a tocar Conectar."); return; }
+  if(AUD.links.some(L => L.port === port)){ audMsg("Esa placa ya estaba conectada."); return; }
+  try{
+    await port.open({baudRate:921600});
+  }catch(e){
+    const m = (e && e.message) ? e.message : String(e);
+    if(!/already open/i.test(m)){
+      audMsg("No pude abrir el puerto: " + m + ". Cerra el Monitor Serie del Arduino IDE.");
+      return;
+    }
+  }
+  const L = audEnchufar(port);
+  audMsg("Placa " + (L.idx+1) + " conectada. Esperando datos...");
 }
 
 /* Lector instrumentado. La version anterior envolvia todo en un catch mudo:
@@ -3189,11 +3222,13 @@ function goto(mode){
   if(mode === "cotejo"){
     stopAll(); show("cotejo"); location.hash = "cotejo";
     CJ.cv = $("cj-lienzo"); CJ.cx = CJ.cv.getContext("2d");
+    audAuto();
     S.mode = "cotejo"; S.running = true; loop(); return;
   }
   if(mode === "planta"){
     stopAll(); show("planta"); location.hash = "planta";
     PL.cv = $("pl-lienzo"); PL.cx = PL.cv.getContext("2d");
+    audAuto();
     plantaReset(); S.mode = "planta"; S.running = true;
     $("plopbar").style.opacity = "1";
     clearTimeout(opTimer);
@@ -3211,6 +3246,7 @@ function goto(mode){
   }
   if(mode === "aud"){
     stopAll(); show("aud"); location.hash = "aud";
+    audAuto();
     S.mode = "aud"; S.running = true;
     $("aopbar").style.opacity = "1";
     clearTimeout(opTimer);
