@@ -2814,10 +2814,14 @@ const PL = {
   pistas: [],            // pistas confirmadas, en coordenadas de la sala
   sigId: 1, tDib:0, pico:0, disp:0,
   // Donde esta parado cada radar y hacia donde mira (grados, 0 = hacia arriba)
+  /* Con cables de 1 m no se pueden separar los radares, pero SI se los puede
+     apuntar para lados distintos desde la misma mesa. Volumenes que no se pisan
+     = 3 + 3 = 6 personas, que es el doble del limite de un modulo solo.       */
   DISPOS: [
-    { nombre:"SUPERPUESTOS · para probar", sitios:[{x:0,y:0,rot:0},   {x:0,y:0,rot:0}] },
-    { nombre:"ENFRENTADOS · 5 m",          sitios:[{x:0,y:0,rot:0},   {x:0,y:5000,rot:180}] },
-    { nombre:"EN ESQUINA · 90 grados",     sitios:[{x:0,y:0,rot:0},   {x:-2500,y:2500,rot:90}] }
+    { nombre:"ESPALDA CON ESPALDA · 6 personas", sitios:[{x:0,y:0,rot:0}, {x:0,y:-200,rot:180}] },
+    { nombre:"EN ABANICO · 90 grados entre sí",  sitios:[{x:-150,y:0,rot:-45}, {x:150,y:0,rot:45}] },
+    { nombre:"MISMO LADO · para probar",         sitios:[{x:0,y:0,rot:0}, {x:0,y:0,rot:0}] },
+    { nombre:"ENFRENTADOS · 5 m",                sitios:[{x:0,y:0,rot:0}, {x:0,y:5000,rot:180}] }
   ]
 };
 
@@ -2998,15 +3002,23 @@ function plantaRender(cx, X, Y, W, H, dpr, now, compacto){
   cx.beginPath(); cx.rect(X, Y, W, H); cx.clip();
   cx.fillStyle = "#06090C"; cx.fillRect(X, Y, W, H);
 
-  const ox = X + W/2, oy = Y + H - 22*dpr;
-  const k = (H - 44*dpr) / PL.escala;
+  /* Si algun radar no mira al frente, la sala se extiende para todos lados:
+     el sensor va al centro y los anillos son circulos enteros.               */
+  const sitios = PL.DISPOS[PL.disp].sitios;
+  const vuelta = plantaRadares().some((L,i) => (sitios[i] || {rot:0}).rot !== 0);
+  const ox = X + W/2;
+  const oy = vuelta ? Y + H/2 : Y + H - 22*dpr;
+  const k = (vuelta ? (Math.min(W, H) - 44*dpr) / 2 : H - 44*dpr) / PL.escala;
 
   cx.strokeStyle = "rgba(36,48,64,.9)"; cx.lineWidth = 1*dpr;
   cx.font = (10*dpr) + "px 'IBM Plex Mono', monospace";
   cx.fillStyle = "rgba(90,100,114,.95)";
   for(let m=1; m*1000 <= PL.escala; m++){
     const rad = m*1000*k;
-    cx.beginPath(); cx.arc(ox, oy, rad, Math.PI, 2*Math.PI); cx.stroke();
+    cx.beginPath();
+    if(vuelta) cx.arc(ox, oy, rad, 0, Math.PI*2);
+    else       cx.arc(ox, oy, rad, Math.PI, 2*Math.PI);
+    cx.stroke();
     cx.fillText(m + " m", ox + 6*dpr, oy - rad + 13*dpr);
   }
 
